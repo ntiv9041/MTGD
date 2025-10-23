@@ -41,8 +41,7 @@ def parse_args_and_config():
     )
     parser.add_argument(
         "--sample",
-        default=True,
-        action="store",
+        action="store_true",
         help="Whether to produce samples from the model",
     )
     parser.add_argument(
