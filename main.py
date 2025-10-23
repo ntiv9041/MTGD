@@ -39,11 +39,19 @@ def parse_args_and_config():
         default="info",
         help="Verbose level: info | debug | warning | critical",
     )
+    # -- Change Sample ----
     parser.add_argument(
         "--sample",
         action="store_true",
         help="Whether to produce samples from the model",
     )
+    # -- Add Test ----
+    parser.add_argument(
+            "--test",
+            action="store_true",
+            help="Whether to produce samples from the model",
+    )
+    
     parser.add_argument(
         "--resume_training", default=False,action="store_true", help="Whether to resume training"
     )
