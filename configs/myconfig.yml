@@ -1,0 +1,50 @@
+data:
+    num_workers: 1
+
+model:
+    type: "simple"
+    in_channels: 1
+    stack: 9
+    out_ch: 1
+    ch: 128
+    dropout: 0.0
+    var_type: fixedsmall
+    num_input_modality: 3
+
+diffusion:
+    beta_schedule: linear
+    beta_start: 0.0001
+    beta_end: 0.02
+    num_diffusion_timesteps: 1000
+
+training:
+    batch_size: 8
+    snapshot_freq: 1000 # was 30000
+    n_epochs: 10000 # keep it the same
+    n_iters: 4800  # was 5000000, to 1 hr training
+    max_minutes: 45 # 45 min of training
+
+sampling:
+    batch_size: 8
+    last_only: True
+
+optim:
+    weight_decay: 0.000
+    optimizer: "Adam"
+    lr: 0.00003
+    beta1: 0.9
+    amsgrad: false
+    eps: 0.00000001
+
+
+pet:
+    # pet types as target
+    pet_modalities: ['18F-AV45_ISO_BFC_rigid_normalised_brain.nii.gz', '18F-AV1451_ISO_BFC_rigid_normalised_brain.nii.gz', '18F-FBB_ISO_BFC_rigid_normalised_brain.nii.gz', '18F-MK6240_ISO_BFC_rigid_normalised_brain.nii.gz']
+
+
+mri:
+    # mri types as conditional input
+    mri_sequence: ['T2_ISO_BFC_normalised_brain.nii.gz','FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz', 'T1_ISO_BFC_rigid_normalised_brain.nii.gz']
+
+folder_path:
+    path : "/content/data/Data"
