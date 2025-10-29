@@ -200,7 +200,9 @@ class Diffusion(object):
                     if use_amp:
                         with autocast():
                             loss = loss_registry[config.model.type](
-                                model, mini_labels, t, e, b, mini_inputs, pet                            self.schedule_sampler.update_with_local_losses(t, loss.detach())
+                                model, mini_labels, t, e, b, mini_inputs, pet_type_batch
+                            )
+                        self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
                         w_loss = (loss * weights).mean(dim=0)
 
@@ -214,8 +216,9 @@ class Diffusion(object):
                         scaler.update()
                     else:
                         loss = loss_registry[config.model.type](
-                            model,(self.schedule_sampler, LossAwareSampler):
-                            self.schedule_sampler.update_with_local_losses(t, loss.detach())
+                            model, mini_labels, t, e, b, mini_inputs, pet_type_batch
+                        )                       
+                        self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
                         w_loss = (loss * weights).mean(dim=0)
 
@@ -431,3 +434,4 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
