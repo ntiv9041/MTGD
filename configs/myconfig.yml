@@ -1,5 +1,12 @@
+
 data:
-    num_workers: 1
+  num_workers: 6          # used by DataLoader (patch below)
+  pin_memory: true        # used by DataLoader (patch below)
+  persistent_workers: true
+  # Optional central-slice training filter (patch below)
+  train_central_slices:   # if null, use all; otherwise keep central N slices per volume
+    enabled: true
+    count: 96             # e.g., keep central 96 slices per subject per epoch
 
 model:
     type: "simple"
@@ -18,20 +25,24 @@ diffusion:
     num_diffusion_timesteps: 1000
 
 training:
-    batch_size: 8
-    snapshot_freq: 1000 # was 30000
-    n_epochs: 10000 # keep it the same
-    n_iters: 4800  # was 5000000, to 1 hr training
-    max_minutes: 45 # 45 min of training
+  batch_size: 16          # A100 headroom
+  snapshot_freq: 1000
+  n_epochs: 10000
+  n_iters: 20000          # ≈45–75 min on A100, adjust 30k for ~90 min
+  max_minutes: 75         # wall clock safeguard
+  mixed_precision: true   # AMP switch (patch below)
+  log_every: 100          # console logging cadence (patch below)
 
 sampling:
-    batch_size: 8
-    last_only: True
+  batch_size: 8
+  last_only: True
+  timestep_stride: 10     # ≈1000/10 = 100 denoise steps (fast but decent)
+  max_slices: 32          # take central 32 slices per subject during sampling
 
 optim:
     weight_decay: 0.000
     optimizer: "Adam"
-    lr: 0.00003
+    lr: 0.00001             # 1e-5 like the paper on A100
     beta1: 0.9
     amsgrad: false
     eps: 0.00000001
