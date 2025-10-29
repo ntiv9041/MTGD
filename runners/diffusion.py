@@ -7,7 +7,7 @@ import torch
 import sys
 import cv2
 import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 sys.path.append('..')
 from models.MTGD import Model
@@ -108,7 +108,7 @@ class Diffusion(object):
         optimizer = get_optimizer(self.config, model.parameters())
 
         use_amp = getattr(self.config.training, "mixed_precision", False)
-        scaler = GradScaler(enabled=use_amp)
+        scaler = GradScaler(device="cuda", enabled=use_amp)
 
         start_epoch, step = 0, 0
 
@@ -198,7 +198,7 @@ class Diffusion(object):
 
                     # ----- forward loss with/without AMP -----
                     if use_amp:
-                        with autocast():
+                        with autocast(device_type="cuda"):
                             loss = loss_registry[config.model.type](
                                 model, mini_labels, t, e, b, mini_inputs, pet_type_batch
                             )
@@ -434,4 +434,5 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
