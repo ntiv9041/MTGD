@@ -32,3 +32,6 @@ PATH/TO/DATA/
 │   ├── mri_type2.nii.gz
 │   └── ...
 
+## This is how it should look like
+<img width="276" height="442" alt="image" src="https://github.com/user-attachments/assets/990e6f07-0086-4bf4-884b-7637d87909b7" />
+
