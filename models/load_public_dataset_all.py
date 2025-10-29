@@ -177,7 +177,7 @@ class MyDatasetTest(Dataset):
         # Load PET label volume
         labels_nii = nib.load(pet_path)
         Mask_numpy = labels_nii.get_fdata()
-        Mask_numpy = MyDataset.min_max_normalize(self=None, arr=Mask_numpy)  # reuse static method
+        Mask_numpy = MyDataset.min_max_normalize(arr=Mask_numpy)  # reuse static method
         label = torch.from_numpy(Mask_numpy)
 
         # Load MRI condition volumes
@@ -188,7 +188,7 @@ class MyDatasetTest(Dataset):
             else:
                 CT_nii = nib.load(p)
                 CT_numpy = CT_nii.get_fdata()
-                CT_numpy = MyDataset.min_max_normalize(self=None, arr=CT_numpy)
+                CT_numpy = MyDataset.min_max_normalize(arr=CT_numpy)
                 input_numpy_list.append(CT_numpy)
 
         input_numpy_list = np.array(input_numpy_list)  # (num_modalities, Z, Y, X)
@@ -234,5 +234,10 @@ def find_folders_with_specific_files(folder_path, required_files):
             matching_folders.append(subfolder)
 
     return matching_folders
+
+
+
+
+
 
 
