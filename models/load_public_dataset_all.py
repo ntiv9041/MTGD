@@ -22,36 +22,55 @@ def split_and_label(final_pet_lists, train_ratio=0.8):
     return train_set, test_set
 
 
-def generate_nifti_structure(folder_path,structural_mri,pet_images):
-    # List all subdirectories in the folder
-    subfolders = [os.path.join(folder_path, subfolder) for subfolder in os.listdir(folder_path) if os.path.isdir(os.path.join(folder_path, subfolder))]
+def generate_nifti_structure_test(folder_path, structural_mri, pet_images):
+    """
+    Build a combined list across ALL subject subfolders:
+      [mri_list, pet_path, pet_index]
+    No train/test split; used for sampling/inference.
+    """
+    if not os.path.exists(folder_path):
+        raise FileNotFoundError(f"Base data folder does not exist: {folder_path}")
 
-    pet_types = {}
+    # Subject subfolders, e.g., /content/data/Data/941_S_10065
+    subfolders = [
+        os.path.join(folder_path, sub)
+        for sub in os.listdir(folder_path)
+        if os.path.isdir(os.path.join(folder_path, sub))
+    ]
+
+    combined = []
+    num_subjects = 0
+    num_entries = 0
+
     for subfolder in subfolders:
-        # List all files in the subfolder
-        files = os.listdir(subfolder)
+        try:
+            files = os.listdir(subfolder)
+        except Exception as e:
+            print(f"[WARN] Could not list: {subfolder} ({e})")
+            continue
 
-        # Define file categories
-        structural_mri = structural_mri
-        pet_images = pet_images
+        num_subjects += 1
 
-        # Initialize lists for structural MRI and PET
+        # MRI list in the order provided by structural_mri
         mri_list = [
             os.path.join(subfolder, file) if file in files else ''
             for file in structural_mri
         ]
 
+        # For each PET tracer present, append an entry
         for pet in pet_images:
             if pet in files:
-                if pet not in pet_types:
-                    pet_types[pet] = []
-                pet_types[pet].append([mri_list, os.path.join(subfolder, pet), pet_images.index(pet)])
+                combined.append([mri_list, os.path.join(subfolder, pet), pet_images.index(pet)])
+                num_entries += 1
 
-    # Compile the final list of PET type-specific lists
-    final_pet_lists = [pet_types[pet] for pet in pet_types if pet_types[pet]]
-    train_set, test_set = split_and_label(final_pet_lists)
+    if num_entries == 0:
+        raise RuntimeError(
+            "No matching PET files were found under "
+            f"{folder_path}. Check modality names in config and folder contents."
+        )
 
-    return train_set, test_set
+    print(f"[INFO] Test build: subjects scanned={num_subjects}, entries created={num_entries}")
+    return combined
 
 
 
@@ -83,36 +102,40 @@ def generate_nifti_structure_test(folder_path,structural_mri,pet_images):
 
     return train_set
 
-class MyDataset(Dataset):
-    def __init__(self,dataset):
-        self.dataset = dataset
+class MyDatasetTest(Dataset):
+    """
+    Test-time dataset that also returns metadata for manifest writing:
+    returns: inputs, label, pet_type, pet_path, mri_list
+    """
+    def __init__(self, dataset):
+        self.dataset = dataset  # list of [mri_list, pet_path, pet_index]
 
     def __getitem__(self, index):
-        # get pet type
-        pet_type = torch.tensor(self.dataset[index][2])
+        mri_list, pet_path, pet_index = self.dataset[index]
+        pet_type = torch.tensor(pet_index)
 
-        # get label
-        labels_nii = nib.load(self.dataset[index][1])
+        # Load PET label volume
+        labels_nii = nib.load(pet_path)
         Mask_numpy = labels_nii.get_fdata()
-        Mask_numpy = self.min_max_normalize(Mask_numpy)
+        Mask_numpy = MyDataset.min_max_normalize(self=None, arr=Mask_numpy)  # reuse static method
         label = torch.from_numpy(Mask_numpy)
 
-        # get input
+        # Load MRI condition volumes
         input_numpy_list = []
-        for k in range(len(self.dataset[index][0])):
-            if len(self.dataset[index][0][k]) == 0:
+        for p in mri_list:
+            if len(p) == 0:
                 input_numpy_list.append(np.zeros_like(Mask_numpy))
             else:
-                CT_nii = nib.load(self.dataset[index][0][k])
+                CT_nii = nib.load(p)
                 CT_numpy = CT_nii.get_fdata()
-                CT_numpy = self.min_max_normalize(CT_numpy)
+                CT_numpy = MyDataset.min_max_normalize(self=None, arr=CT_numpy)
                 input_numpy_list.append(CT_numpy)
 
-        input_numpy_list = np.array(input_numpy_list)
-        # (1,x,y,z)
+        input_numpy_list = np.array(input_numpy_list)  # (num_modalities, Z, Y, X)
         inputs = torch.from_numpy(input_numpy_list)
 
-        return inputs, label, pet_type
+        # Return metadata so the sampler can write a manifest
+        return inputs, label, pet_type, pet_path, mri_list
 
     def __len__(self):
         return len(self.dataset)
@@ -129,33 +152,30 @@ class MyDataset(Dataset):
         return normalized_arr
 
 
-required_files = [
-    '18F-AV45_ISO_BFC_rigid_normalised_brain.nii.gz',
-    '18F-AV1451_ISO_BFC_rigid_normalised_brain.nii.gz'
-]
-mri = ['T2_ISO_BFC_normalised_brain.nii.gz', 'FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz','T1_ISO_BFC_rigid_normalised_brain.nii.gz']
-path = "/g/data/iq24/public_PET/PET_preprosessing/MRI/MRI_dataset/ADNI/021_S_10114"
+# required_files = [
+#     '18F-AV45_ISO_BFC_rigid_normalised_brain.nii.gz',
+#     '18F-AV1451_ISO_BFC_rigid_normalised_brain.nii.gz'
+# ]
+# mri = ['T2_ISO_BFC_normalised_brain.nii.gz', 'FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz','T1_ISO_BFC_rigid_normalised_brain.nii.gz']
+# path = "/g/data/iq24/public_PET/PET_preprosessing/MRI/MRI_dataset/ADNI/021_S_10114"
 
 
 
-def load_data(structural_mri,pet_images,folder_path,train=True):
+def load_data(structural_mri, pet_images, folder_path, train=True):
+    folder_path = folder_path  # path comes from config
 
-    folder_path = folder_path  # Replace with your folder path
-    train_set, test_set = generate_nifti_structure(folder_path,structural_mri,pet_images)
+    train_set, test_set = generate_nifti_structure(folder_path, structural_mri, pet_images)
 
     if train:
         my_dataset = MyDataset(train_set)
-    #else:
-    #    my_dataset = MyDataset(test_set)
-    
     else:
-        final_pet_lists = generate_nifti_structure_test(path,mri,required_files)
-        my_dataset = MyDataset(final_pet_lists)
+        # Use the config-provided folder/modality lists across ALL subjects
+        final_pet_lists = generate_nifti_structure_test(folder_path, structural_mri, pet_images)
+        my_dataset = MyDatasetTest(final_pet_lists)
 
     loader = DataLoader(
         my_dataset, batch_size=1, shuffle=True, num_workers=1, drop_last=False
     )
-
     return loader
     
 
@@ -178,6 +198,7 @@ def find_folders_with_specific_files(folder_path, required_files):
 #folder_path = "/g/data/iq24/public_PET/PET_preprosessing/MRI/MRI_dataset/ADNI/"
 #matching_folders = find_folders_with_specific_files(folder_path, required_files)
 #print("Folders with required files:", matching_folders)
+
 
 
 
