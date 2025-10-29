@@ -201,7 +201,7 @@ class MyDatasetTest(Dataset):
         return len(self.dataset)
 
 
-def load_data(structural_mri, pet_images, folder_path, train=True):
+def load_data(structural_mri, pet_images, folder_path, train=True, num_workers=0, pin_memory=False, persistent_workers=False):
     folder_path = folder_path  # path comes from config
 
     train_set, test_set = generate_nifti_structure(folder_path, structural_mri, pet_images)
@@ -214,7 +214,11 @@ def load_data(structural_mri, pet_images, folder_path, train=True):
         my_dataset = MyDatasetTest(final_pet_lists)
 
     loader = DataLoader(
-        my_dataset, batch_size=1, shuffle=True, num_workers=1, drop_last=False
+        my_dataset, batch_size=1, shuffle=True, 
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=persistent_workers if num_workers > 0 else False,
+        drop_last=False
     )
     return loader
     
@@ -234,6 +238,7 @@ def find_folders_with_specific_files(folder_path, required_files):
             matching_folders.append(subfolder)
 
     return matching_folders
+
 
 
 
