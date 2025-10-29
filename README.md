@@ -19,6 +19,9 @@ folder_path:
 
 ```
 Each patient's folder must include all corresponding .nii.gz files.
+
+<img width="276" height="442" alt="image" src="https://github.com/user-attachments/assets/7fc03fcb-a29d-46f7-9599-83b87caf92f4" />
+
 > 📌 Make sure that the file names match those specified in `mri_sequence` and `pet_modalities` in your config file.
 ```
 PATH/TO/DATA/
@@ -32,6 +35,5 @@ PATH/TO/DATA/
 │   ├── mri_type2.nii.gz
 │   └── ...
 
-## This is how it should look like
-<img width="276" height="442" alt="image" src="https://github.com/user-attachments/assets/990e6f07-0086-4bf4-884b-7637d87909b7" />
+
 
