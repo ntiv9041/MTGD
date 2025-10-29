@@ -216,28 +216,19 @@ class Diffusion(object):
 
                     e = torch.randn_like(mini_labels)
                     b = self.betas
-
                     t, weights = self.schedule_sampler.sample(mini_labels.shape[0], self.device)
 
-                    # model,x0,t,noise,beta
-                    # loss = loss_registry[config.model.type](model, mini_labels, t,e, b, mini_inputs, pet_type_batch,keepdim=True, loss_moment=True)
-
-                    with torch.cuda.amp.autocast():
-                        loss = loss_registry[config.model.type](model, mini_labels, t, e, b, mini_inputs, pet=True, loss_moment=True)
-                    else:
-                        loss = loss_registry[config.model.type](model, mini_labels, t, e, b, mini_inputs, pdim=True, loss_moment=True)
-
-                    
-                    if isinstance(self.schedule_sampler, LossAwareSampler):
-                        self.schedule_sampler.update_with_local_losses(
-                            t, loss.detach()
-                        )
-
-                    w_loss = (loss * weights).mean(dim=0)
-
-                    # New AMP, CS adding
-                    optimizer.zero_grad(set_to_none=True)
+                   # ----- forward loss with/without AMP -----
                     if use_amp:
+                        with torch.cuda.amp.autocast():
+                            loss = loss_registry[config.model.type](
+                                model, mini_labels, t, e, b, mini_inputs, pet_type_batch,
+                        if isinstance(self.schedule_sampler, LossAwareSampler):
+                            self.schedule_sampler.update_with_local_losses(t, loss.detach())
+                    
+                        w_loss = (loss * weights).mean(dim=0)
+                    
+                        optimizer.zero_grad(set_to_none=True)
                         scaler.scale(w_loss).backward()
                         try:
                             torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_clip)
@@ -246,6 +237,13 @@ class Diffusion(object):
                         scaler.step(optimizer)
                         scaler.update()
                     else:
+                        loss = loss_registryconfig.model.type
+                        if isinstance(self.schedule_sampler, LossAwareSampler):
+                            self.schedule_sampler.update_with_local_losses(t, loss.detach())
+                    
+                        w_loss = (loss * weights).mean(dim=0)
+                    
+                        optimizer.zero_grad(set_to_none=True)
                         w_loss.backward()
                         try:
                             torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_clip)
@@ -271,7 +269,7 @@ class Diffusion(object):
                         logging.info(f"step={step} loss={loss.mean(dim=0):.6f} w_loss={w_loss:.6f} data_time={data_time/(i+1):.4f}")
 
                     # ---- NEW: stop conditions (time or steps) ----
-                    elapsed_min = (time.time() - wall_start) / 45.0
+                    elapsed_min = (time.time() - wall_start) / 60.0
                     if (max_steps is not None and step >= max_steps) or \
                        (max_minutes is not None and elapsed_min >= max_minutes):
                         states = [
@@ -311,8 +309,12 @@ class Diffusion(object):
 
         logging.info('loading parameters successfully')
         model.eval()
-        test_loader = load_data(config.mri.mri_sequence, config.pet.pet_modalities, config.folder_path.path,False)
-
+        test_loader = load_data(
+            config.mri.mri_sequence, config.pet.pet_modalities, config.folder_path.path, False,
+            num_workers=getattr(config.data, "num_workers", 0),
+            pin_memory=getattr(config.data, "pin_memory", False),
+            persistent_workers=getattr(config.data, "persistent_workers", False),
+        )
         self.sample_sequence(model, test_loader)
 
     def sample_sequence(self, model, test_loader):
@@ -480,5 +482,6 @@ class Diffusion(object):
             
         return idx
     
+
 
 
