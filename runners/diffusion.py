@@ -1,4 +1,5 @@
 import os
+import csv
 import logging
 import time
 import glob
@@ -279,70 +280,133 @@ class Diffusion(object):
         self.sample_sequence(model, test_loader)
 
     def sample_sequence(self, model, test_loader):
+        """
+        Generate images for all items in test_loader, save PNGs, and write a manifest CSV.
+    
+        Manifest columns:
+          png_path, subject_id, tracer_name, pet_index, batch_index, sequence_index, pet_path
+        """
         minibatch = self.config.sampling.batch_size
-
         logging.info('start generating images')
-        for i, (condition, x0,pet_type) in enumerate(test_loader):
-            condition = condition.squeeze(0).permute(3, 0, 1, 2)
-            condition = F.interpolate(condition, size=(224, 224), mode='bilinear', align_corners=False).unsqueeze(2)
-
-            x0 = x0.permute(3, 0, 1, 2)
-            x0 = F.interpolate(x0, size=(224, 224), mode='bilinear', align_corners=False)
-
-            index = 0
-            while index < len(x0):
-
-                start = index
-                stop = index + minibatch
-                index = stop
-                if stop >= len(x0):
-                    stop = len(x0)
-
-                x0_mini = x0[start:stop]
-                condition_mini = condition[start:stop]
-
-                batch_sums = x0_mini.sum(dim=(1, 2,3))
-                non_zero_indices = batch_sums != 0
-
-            
-                if torch.sum(non_zero_indices == False).item() == (stop - start):
-                    continue
+    
+        # Prepare manifest CSV under image_samples/
+        manifest_path = os.path.join(self.args.image_folder, "samples_manifest.csv")
+        os.makedirs(self.args.image_folder, exist_ok=True)
+    
+        write_header = not os.path.exists(manifest_path)
+        manifest_f = open(manifest_path, 'a', newline='')
+        manifest_w = csv.writer(manifest_f)
+        if write_header:
+            manifest_w.writerow([
+                "png_path", "subject_id", "tracer_name", "pet_index",
+                "batch_index", "sequence_index", "pet_path"
+            ])
+    
+        try:
+            for i, batch in enumerate(test_loader):
+                # The sampling dataset may return:
+                # (condition, x0, pet_type, pet_path, mri_list)  -> len==5 (new MyDatasetTest)
+                # (condition, x0, pet_type)                      -> len==3 (older MyDataset)
+                if isinstance(batch, (list, tuple)) and len(batch) == 5:
+                    condition, x0, pet_type, pet_path_list, mri_list = batch
+                    # batch_size=1 -> pet_path_list will be ['.../subject/tracer.nii.gz']
+                    pet_path = pet_path_list[0] if isinstance(pet_path_list, (list, tuple)) else pet_path_list
+                elif isinstance(batch, (list, tuple)) and len(batch) == 3:
+                    condition, x0, pet_type = batch
+                    pet_path = "UNKNOWN"
+                    mri_list = []
                 else:
-                    condition_mini = condition_mini[non_zero_indices]
-                    x0_mini = x0_mini[non_zero_indices]
-
-                if len(condition_mini.shape) == 3:
-                    x0_mini = x0_mini.unsqueeze(0)
-                    condition_mini = condition_mini.unsqueeze(0)
-
-                x0_mini, condition_mini = x0_mini.to(self.device).float(), condition_mini.to(self.device).float()
-
-                # random noise, star noise
-                x = torch.randn(
-                    (len(x0_mini)),  # batch_size
-                    1,  # data.channels
-                    x0_mini.shape[2],  # image_size
-                    x0_mini.shape[3],  # image_size
-                    device=self.device,
-                )
-
-
-                with torch.no_grad():
- 
-                    print(condition_mini.shape,x.shape)
-                    pet_type_batch = pet_type.to(self.device).float().repeat_interleave(x.shape[0])
-                    
-                    x = self.sample_image(x, model, condition_mini, pet_type_batch,last=True)
-
-                    x = (x * 255.0).clamp(0, 255).to(torch.uint8)
-                    x0_mini = (x0_mini * 255.0).clamp(0, 255).to(torch.uint8)
-                    
-                    x = x.permute(0, 2, 3, 1).contiguous().cpu().numpy()
-                    x0_mini = x0_mini.permute(0, 2, 3, 1).contiguous().cpu().numpy()
-
-                    images = np.concatenate([x, x0_mini], axis=2)
-                    index = self.save_img(images,i,index)
-
+                    raise RuntimeError(
+                        f"Unexpected batch structure: type={type(batch)} "
+                        f"len={len(batch) if hasattr(batch,'__len__') else 'NA'}"
+                    )
+    
+                # Derive metadata
+                tracer_name = os.path.basename(pet_path) if pet_path != "UNKNOWN" else "UNKNOWN"
+                subject_id  = os.path.basename(os.path.dirname(pet_path)) if pet_path != "UNKNOWN" else "UNKNOWN"
+    
+                # Shape wrangling (keep consistent with your pipeline)
+                condition = condition.squeeze(0).permute(3, 0, 1, 2)
+                condition = F.interpolate(
+                    condition, size=(224, 224), mode='bilinear', align_corners=False
+                ).unsqueeze(2)
+    
+                x0 = x0.permute(3, 0, 1, 2)
+                x0 = F.interpolate(x0, size=(224, 224), mode='bilinear', align_corners=False)
+    
+                # We’ll keep our own sequence counter per batch folder
+                seq_counter = 0
+                index = 0
+                while index < len(x0):
+                    start = index
+                    stop = index + minibatch
+                    index = stop
+                    if stop >= len(x0):
+                        stop = len(x0)
+    
+                    x0_mini = x0[start:stop]
+                    condition_mini = condition[start:stop]
+    
+                    # Drop all-black target slices
+                    batch_sums = x0_mini.sum(dim=(1, 2, 3))
+                    non_zero_indices = batch_sums != 0
+                    if torch.sum(non_zero_indices == False).item() == (stop - start):
+                        continue
+                    else:
+                        condition_mini = condition_mini[non_zero_indices]
+                        x0_mini        = x0_mini[non_zero_indices]
+    
+                    # Edge-case: single slice -> add batch dim
+                    if len(condition_mini.shape) == 3:
+                        x0_mini        = x0_mini.unsqueeze(0)
+                        condition_mini = condition_mini.unsqueeze(0)
+    
+                    x0_mini        = x0_mini.to(self.device).float()
+                    condition_mini = condition_mini.to(self.device).float()
+    
+                    # Random noise for sampling
+                    x = torch.randn(
+                        (len(x0_mini), 1, x0_mini.shape[2], x0_mini.shape[3]),
+                        device=self.device,
+                    )
+    
+                    with torch.no_grad():
+                        pet_type_batch = pet_type.to(self.device).float().repeat_interleave(x.shape[0])
+                        x = self.sample_image(x, model, condition_mini, pet_type_batch, last=True)
+    
+                        # Convert to uint8 for PNG saving
+                        x       = (x * 255.0).clamp(0, 255).to(torch.uint8)
+                        x0_mini = (x0_mini * 255.0).clamp(0, 255).to(torch.uint8)
+    
+                        # HWC for cv2.imwrite
+                        x       = x.permute(0, 2, 3, 1).contiguous().cpu().numpy()
+                        x0_mini = x0_mini.permute(0, 2, 3, 1).contiguous().cpu().numpy()
+    
+                        # Concatenate generated | target for easy visual review
+                        images = np.concatenate([x, x0_mini], axis=2)
+    
+                    # Save and write manifest rows
+                    batch_folder = os.path.join(self.args.image_folder, str(i))
+                    os.makedirs(batch_folder, exist_ok=True)
+    
+                    for img_np in images:
+                        png_path = os.path.join(batch_folder, str(seq_counter)) + '.png'
+                        cv2.imwrite(png_path, img_np)
+    
+                        manifest_w.writerow([
+                            png_path,
+                            subject_id,
+                            tracer_name,
+                            int(pet_type.item()),  # pet_index as scalar
+                            i,                     # batch_index
+                            seq_counter,           # sequence_index within this batch folder
+                            pet_path
+                        ])
+                        seq_counter += 1
+    
+            logging.info(f"Manifest written to: {manifest_path}")
+        finally:
+            manifest_f.close()
 
     def sample_image(self, x, model, condition, pet_type_batch,last=True):
 
@@ -367,3 +431,4 @@ class Diffusion(object):
             
         return idx
     
+
