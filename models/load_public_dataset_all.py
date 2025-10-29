@@ -1,3 +1,4 @@
+
 from torch.utils.data import Dataset, DataLoader
 import os
 import torch
@@ -5,7 +6,6 @@ import numpy as np
 import nibabel as nib
 import SimpleITK as sitk
 import random
-
 
 
 def split_and_label(final_pet_lists, train_ratio=0.8):
@@ -112,6 +112,56 @@ def generate_nifti_structure(folder_path, structural_mri, pet_images):
     train_set, test_set = split_and_label(final_pet_lists, train_ratio=0.8)
     return train_set, test_set
 
+
+# TRAIN dataset (3 items): inputs, label, pet_type
+class MyDataset(Dataset):
+    """
+    TRAIN dataset.
+    Returns exactly (inputs, label, pet_type)
+      - inputs: (num_modalities, Z, Y, X) float32 tensor
+      - label:  (Z, Y, X) float32 tensor (PET ground truth)
+      - pet_type: int tensor (index of tracer in pet_images)
+    """
+    def __init__(self, dataset):
+        # dataset = list of [mri_list, pet_path, pet_index]
+        self.dataset = dataset
+    def __getitem__(self, index):
+        mri_list, pet_path, pet_index = self.dataset[index]
+        pet_type = torch.tensor(pet_index)
+
+        # Load PET label (target)
+        labels_nii = nib.load(pet_path)
+        label_np = labels_nii.get_fdata().astype(np.float32)
+        label_np = self.min_max_normalize(label_np)
+        label = torch.from_numpy(label_np)
+
+        # Load MRI inputs; replace missing paths with zeros matching PET shape
+        input_np_list = []
+        for mri_path in mri_list:
+            if not mri_path:
+                input_np_list.append(np.zeros_like(label_np, dtype=np.float32))
+            else:
+                mri_nii = nib.load(mri_path)
+                mri_np = mri_nii.get_fdata().astype(np.float32)
+                mri_np = self.min_max_normalize(mri_np)
+                input_np_list.append(mri_np)
+
+        inputs = torch.from_numpy(np.array(input_np_list, dtype=np.float32))  # (M, Z, Y, X)
+        return inputs, label, pet_type
+
+    def __len__(self):
+        return len(self.dataset)
+
+    @staticmethod
+    def min_max_normalize(arr):
+        min_val = float(np.min(arr))
+        max_val = float(np.max(arr))
+        if max_val == 0.0:
+            return np.zeros_like(arr, dtype=np.float32)
+        return ((arr - min_val) / (max_val - min_val)).astype(np.float32)
+
+
+
 class MyDatasetTest(Dataset):
     """
     Test-time dataset that also returns metadata for manifest writing:
@@ -127,7 +177,7 @@ class MyDatasetTest(Dataset):
         # Load PET label volume
         labels_nii = nib.load(pet_path)
         Mask_numpy = labels_nii.get_fdata()
-        Mask_numpy = MyDatasetTest.min_max_normalize(self=None, arr=Mask_numpy)  # reuse static method
+        Mask_numpy = MyDataset.min_max_normalize(self=None, arr=Mask_numpy)  # reuse static method
         label = torch.from_numpy(Mask_numpy)
 
         # Load MRI condition volumes
@@ -138,7 +188,7 @@ class MyDatasetTest(Dataset):
             else:
                 CT_nii = nib.load(p)
                 CT_numpy = CT_nii.get_fdata()
-                CT_numpy = MyDatasetTest.min_max_normalize(self=None, arr=CT_numpy)
+                CT_numpy = MyDataset.min_max_normalize(self=None, arr=CT_numpy)
                 input_numpy_list.append(CT_numpy)
 
         input_numpy_list = np.array(input_numpy_list)  # (num_modalities, Z, Y, X)
@@ -150,26 +200,6 @@ class MyDatasetTest(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-    def min_max_normalize(self,arr):
-
-        min_val = np.min(arr)
-        max_val = np.max(arr)
-
-        normalized_arr = (arr - min_val) / (max_val - min_val)
-
-        if max_val == 0:
-          return np.zeros_like(arr)
-        return normalized_arr
-
-
-# required_files = [
-#     '18F-AV45_ISO_BFC_rigid_normalised_brain.nii.gz',
-#     '18F-AV1451_ISO_BFC_rigid_normalised_brain.nii.gz'
-# ]
-# mri = ['T2_ISO_BFC_normalised_brain.nii.gz', 'FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz','T1_ISO_BFC_rigid_normalised_brain.nii.gz']
-# path = "/g/data/iq24/public_PET/PET_preprosessing/MRI/MRI_dataset/ADNI/021_S_10114"
-
-
 
 def load_data(structural_mri, pet_images, folder_path, train=True):
     folder_path = folder_path  # path comes from config
@@ -177,7 +207,7 @@ def load_data(structural_mri, pet_images, folder_path, train=True):
     train_set, test_set = generate_nifti_structure(folder_path, structural_mri, pet_images)
 
     if train:
-        my_dataset = MyDatasetTest(train_set)
+        my_dataset = MyDataset(train_set)
     else:
         # Use the config-provided folder/modality lists across ALL subjects
         final_pet_lists = generate_nifti_structure_test(folder_path, structural_mri, pet_images)
@@ -188,7 +218,6 @@ def load_data(structural_mri, pet_images, folder_path, train=True):
     )
     return loader
     
-
 
 def find_folders_with_specific_files(folder_path, required_files):
     # List all subdirectories in the folder
@@ -205,9 +234,5 @@ def find_folders_with_specific_files(folder_path, required_files):
             matching_folders.append(subfolder)
 
     return matching_folders
-#folder_path = "/g/data/iq24/public_PET/PET_preprosessing/MRI/MRI_dataset/ADNI/"
-#matching_folders = find_folders_with_specific_files(folder_path, required_files)
-#print("Folders with required files:", matching_folders)
-
 
 
