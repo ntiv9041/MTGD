@@ -116,11 +116,21 @@ class Diffusion(object):
     def train(self):
         args, config = self.args, self.config
 
-        train_loader = load_data(config.mri.mri_sequence,config.pet.pet_modalities,config.folder_path.path)
-
+        # train_loader = load_data(config.mri.mri_sequence,config.pet.pet_modalities,config.folder_path.path)
+        train_loader = load_data(
+            config.mri.mri_sequence,
+            config.pet.pet_modalities,
+            config.folder_path.path,
+            num_workers=getattr(config.data, "num_workers", 0),
+            pin_memory=getattr(config.data, "pin_memory", False),
+            persistent_workers=getattr(config.data, "persistent_workers", False)
+        )
         model = Model(self.config).to(self.device)
-
         optimizer = get_optimizer(self.config, model.parameters())
+        
+        use_amp = getattr(self.config.training, "mixed_precision", False)
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
 
 
         start_epoch, step = 0, 0
@@ -143,6 +153,11 @@ class Diffusion(object):
         max_minutes = getattr(self.config.training, 'max_minutes', None)
         max_steps   = getattr(self.config.training, 'n_iters', None)
         
+        log_every  = getattr(self.config.training, 'log_every', 100)
+        center_cfg = getattr(self.config.data, "train_central_slices", None)
+        center_enabled = bool(center_cfg and getattr(center_cfg, "enabled", False))
+        center_count   = int(center_cfg.count) if center_enabled else None
+        
         for epoch in range(start_epoch, self.config.training.n_epochs):
             data_start = time.time()
             data_time = 0
@@ -155,6 +170,15 @@ class Diffusion(object):
                 
                 labels=labels.permute(3,0,1,2)
                 labels = F.interpolate(labels, size=(224, 224), mode='bilinear', align_corners=False)
+
+                # ---- central slice filter (optional) ----
+                if center_enabled:
+                  total = labels.shape[0]
+                  if center_count is not None and center_count < total:
+                      start_c = max(0, (total - center_count)//2)
+                      end_c   = start_c + center_count
+                      labels = labels[start_c:end_c]
+                      input_img = input_img[start_c:end_c]
 
                 index = 0
 
@@ -196,8 +220,14 @@ class Diffusion(object):
                     t, weights = self.schedule_sampler.sample(mini_labels.shape[0], self.device)
 
                     # model,x0,t,noise,beta
-                    loss = loss_registry[config.model.type](model, mini_labels, t,e, b, mini_inputs, pet_type_batch,keepdim=True, loss_moment=True)
+                    # loss = loss_registry[config.model.type](model, mini_labels, t,e, b, mini_inputs, pet_type_batch,keepdim=True, loss_moment=True)
 
+                    with torch.cuda.amp.autocast():
+                        loss = loss_registry[config.model.type](model, mini_labels, t, e, b, mini_inputs, pet=True, loss_moment=True)
+                    else:
+                        loss = loss_registry[config.model.type](model, mini_labels, t, e, b, mini_inputs, pdim=True, loss_moment=True)
+
+                    
                     if isinstance(self.schedule_sampler, LossAwareSampler):
                         self.schedule_sampler.update_with_local_losses(
                             t, loss.detach()
@@ -205,21 +235,24 @@ class Diffusion(object):
 
                     w_loss = (loss * weights).mean(dim=0)
 
-                    logging.info(
-                        f"step: {step}, loss: {loss.mean(dim=0):.6f}, weight loss: {w_loss:.6f},data time: {data_time / (i + 1):.6f}"
-                    )
+                    # New AMP, CS adding
+                    optimizer.zero_grad(set_to_none=True)
+                    if use_amp:
+                        scaler.scale(w_loss).backward()
+                        try:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_clip)
+                        except Exception:
+                            pass
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        w_loss.backward()
+                        try:
+                            torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_clip)
+                        except Exception:
+                            pass
+                        optimizer.step()
 
-                    optimizer.zero_grad()
-                    w_loss.backward()
-
-                    try:
-                        torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), config.optim.grad_clip
-                        )
-                    except Exception:
-                        pass
-                    optimizer.step()
-                    
                     if step % self.config.training.snapshot_freq == 0 or step == 1:
                         states = [
                             model.state_dict(),
@@ -233,6 +266,9 @@ class Diffusion(object):
                             os.path.join(self.args.log_path, "ckpt_{}.pth".format(step)),
                         )
                         torch.save(states, os.path.join(self.args.log_path, "ckpt.pth"))
+                        
+                    if step % log_every == 0:
+                        logging.info(f"step={step} loss={loss.mean(dim=0):.6f} w_loss={w_loss:.6f} data_time={data_time/(i+1):.4f}")
 
                     # ---- NEW: stop conditions (time or steps) ----
                     elapsed_min = (time.time() - wall_start) / 45.0
@@ -334,8 +370,18 @@ class Diffusion(object):
                 x0 = x0.permute(3, 0, 1, 2)
                 x0 = F.interpolate(x0, size=(224, 224), mode='bilinear', align_corners=False)
     
-                # We’ll keep our own sequence counter per batch folder
+                # We’ll keep our own sequence counter per batch folder        
                 seq_counter = 0
+                max_slices = getattr(self.config.sampling, 'max_slices', None)
+                if max_slices is not None:
+                    total = len(x0)
+                    if max_slices < total:
+                        start_c = max(0, (total - max_slices)//2)
+                        end_c   = start_c + max_slices
+                        x0 = x0[start_c:end_c]
+                        condition = condition[start_c:end_c]
+                        logging.info(f"[Slices] Limiting to {max_slices} central slices (from total={total})")
+
                 index = 0
                 while index < len(x0):
                     start = index
@@ -410,8 +456,11 @@ class Diffusion(object):
 
     def sample_image(self, x, model, condition, pet_type_batch,last=True):
 
-        skip = 1
+        # skip = 1
+        # seq = range(0, self.num_timesteps, skip)
+        skip = getattr(self.config.sampling, 'timestep_stride', 1)
         seq = range(0, self.num_timesteps, skip)
+
 
         from functions.denoising import ddpm_steps
 
@@ -431,4 +480,5 @@ class Diffusion(object):
             
         return idx
     
+
 
