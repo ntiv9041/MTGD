@@ -377,7 +377,7 @@ class Diffusion(object):
             exit()
         
         try:
-            states = torch.load(ckpt_path, map_location=self.config.device)
+            states = torch.load(ckpt_path, map_location=self.config.device, weights_only=False)
             logging.info(f"[DEBUG] Checkpoint loaded successfully. Keys: {list(states.keys()) if isinstance(states, dict) else type(states)}")
         
             # handle both dict and list formats
@@ -580,6 +580,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
