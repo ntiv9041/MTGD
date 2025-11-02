@@ -105,7 +105,28 @@ class Diffusion(object):
         )
 
         model = Model(self.config).to(self.device)
-        optimizer = get_optimizer(self.config, model.parameters())
+
+        # >>> REPLACE optimizer 2/11/25 <<<
+        optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.optim.lr, betas=(self.config.optim.beta1, 0.999), weight_decay=1e-4)
+        total_steps = getattr(self.config.training, "n_iters", 20000)
+        warmup = getattr(self.config.training, "warmup_steps", 2000)
+        def lr_lambda(step):
+            if step < warmup:
+                return float(step + 1) / float(max(1, warmup))
+            # Cosine to 0.1× final
+            progress = (step - warmup) / max(1, total_steps - warmup)
+            return 0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * min(1.0, max(0.0, progress))))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+        # >>> ADD (EMA) 2/11/25<<<
+        ema_decay = getattr(self.config.training, "ema_decay", 0.999)
+        ema_model = Model(self.config).to(self.device)
+        ema_model.load_state_dict(model.state_dict(), strict=True)
+        ema_model.eval()
+        for p in ema_model.parameters():
+            p.requires_grad_(False)
+
 
         use_amp = getattr(self.config.training, "mixed_precision", False)
         scaler = GradScaler(device="cuda", enabled=use_amp)
@@ -129,6 +150,10 @@ class Diffusion(object):
         max_minutes = getattr(self.config.training, "max_minutes", None)
         max_steps = getattr(self.config.training, "n_iters", None)
         log_every = getattr(self.config.training, "log_every", 100)
+
+        # >>> PER-TRACER METRICS 2/11/25 <<<
+        tracer_running = {}   # idx -> [sum, count]
+        tracer_best = {}      # idx -> best_wloss
 
         # optional central-slice training filter
         center_cfg = getattr(self.config.data, "train_central_slices", None)
@@ -205,15 +230,27 @@ class Diffusion(object):
                         self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
                         w_loss = (loss * weights).mean(dim=0)
+                        # pet_type_batch is shape (n,), but you repeated earlier; keep per-sample mapping 2/11/25
+                        for lt, lval in zip(pet_type_batch.detach().long().tolist(), (loss * weights).detach().cpu().tolist()):
+                            s, c = tracer_running.get(lt, [0.0, 0])
+                            tracer_running[lt] = [s + float(lval), c + 1]
 
                         optimizer.zero_grad(set_to_none=True)
+
+                        # >>> Grad Clip AMP_sage 2/11/25 <<<
                         scaler.scale(w_loss).backward()
-                        try:
-                            torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_clip)
-                        except Exception:
-                            pass
+                        # Unscale, then clip
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), getattr(config.optim, "grad_clip", 1.0))
                         scaler.step(optimizer)
                         scaler.update()
+                        scheduler.step()
+                        # >>> UPDATE EMA 2/11/25 <<<
+                        with torch.no_grad():
+                            m, m_ema = model.state_dict(), ema_model.state_dict()
+                            for k in m_ema.keys():
+                                m_ema[k].mul_(ema_decay).add_(m[k], alpha=1.0 - ema_decay)
+
                     else:
                         loss = loss_registry[config.model.type](
                             model, mini_labels, t, e, b, mini_inputs, pet_type_batch
@@ -221,6 +258,10 @@ class Diffusion(object):
                         self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
                         w_loss = (loss * weights).mean(dim=0)
+                        # pet_type_batch is shape (n,), but you repeated earlier; keep per-sample mapping 2/11/25
+                        for lt, lval in zip(pet_type_batch.detach().long().tolist(), (loss * weights).detach().cpu().tolist()):
+                            s, c = tracer_running.get(lt, [0.0, 0])
+                            tracer_running[lt] = [s + float(lval), c + 1]
 
                         optimizer.zero_grad(set_to_none=True)
                         w_loss.backward()
@@ -229,6 +270,12 @@ class Diffusion(object):
                         except Exception:
                             pass
                         optimizer.step()
+                        # >>> UPDATE EMA 2/11/25 <<<
+                        scheduler.step()
+                        with torch.no_grad():
+                            m, m_ema = model.state_dict(), ema_model.state_dict()
+                            for k in m_ema.keys():
+                                m_ema[k].mul_(ema_decay).add_(m[k], alpha=1.0 - ema_decay)
 
                     # logging
                     if step % log_every == 0:
@@ -239,7 +286,18 @@ class Diffusion(object):
 
                     # checkpointing
                     if step % self.config.training.snapshot_freq == 0 or step == 1:
-                        states = [model.state_dict(), optimizer.state_dict(), epoch, step]
+                        # >>> 2/11/25 <<<
+                        states = [ema_model.state_dict(), optimizer.state_dict(), epoch, step]
+                        # >>> SAVE 'BEST' EMA ckpt per tracer 2/11/25<<<
+                        for tid, (s, c) in tracer_running.items():
+                            avg = s / max(1, c)
+                            prev = tracer_best.get(tid, float("inf"))
+                            if avg < prev:
+                                tracer_best[tid] = avg
+                                torch.save([ema_model.state_dict(), optimizer.state_dict(), epoch, step],
+                                           os.path.join(self.args.log_path, f"ckpt_best_tracer{tid}.pth"))
+                        tracer_running.clear()
+
                         torch.save(states, os.path.join(self.args.log_path, f"ckpt_{step}.pth"))
                         torch.save(states, os.path.join(self.args.log_path, "ckpt.pth"))
 
@@ -247,7 +305,17 @@ class Diffusion(object):
                     elapsed_min = (time.time() - wall_start) / 60.0
                     if (max_steps is not None and step >= max_steps) or \
                        (max_minutes is not None and elapsed_min >= max_minutes):
-                        states = [model.state_dict(), optimizer.state_dict(), epoch, step]
+                        # >>> 2/11/25 <<<
+                        states = [ema_model.state_dict(), optimizer.state_dict(), epoch, step]
+                        # >>> SAVE 'BEST' EMA ckpt per tracer 2/11/25<<<
+                        for tid, (s, c) in tracer_running.items():
+                            avg = s / max(1, c)
+                            prev = tracer_best.get(tid, float("inf"))
+                            if avg < prev:
+                                tracer_best[tid] = avg
+                                torch.save([ema_model.state_dict(), optimizer.state_dict(), epoch, step],
+                                           os.path.join(self.args.log_path, f"ckpt_best_tracer{tid}.pth"))
+                        tracer_running.clear()
                         torch.save(states, os.path.join(self.args.log_path, "ckpt.pth"))
                         torch.save(states, os.path.join(self.args.log_path, f"ckpt_{step}.pth"))
                         logging.info(f"Stopping: step={step}, elapsed_min={elapsed_min:.2f}. Saved ckpt.")
@@ -434,5 +502,6 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
