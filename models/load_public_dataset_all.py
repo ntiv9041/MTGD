@@ -143,7 +143,7 @@ class MyDataset(Dataset):
             else:
                 mri_nii = nib.load(mri_path)
                 mri_np = mri_nii.get_fdata().astype(np.float32)
-                mri_np = self.min_max_normalize(mri_np)
+                mri_np = self.zscore_brain(mri_np)
                 input_np_list.append(mri_np)
 
         inputs = torch.from_numpy(np.array(input_np_list, dtype=np.float32))  # (M, Z, Y, X)
@@ -151,6 +151,14 @@ class MyDataset(Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+    @staticmethod
+    def zscore_brain(arr, eps=1e-6):
+        m = np.mean(arr)
+        s = np.std(arr)
+        if s < eps:  # avoid div by zero
+            return np.zeros_like(arr, dtype=np.float32)
+        return ((arr - m) / (s + eps)).astype(np.float32)
 
     @staticmethod
     def min_max_normalize(arr):
@@ -188,7 +196,7 @@ class MyDatasetTest(Dataset):
             else:
                 CT_nii = nib.load(p)
                 CT_numpy = CT_nii.get_fdata()
-                CT_numpy = MyDataset.min_max_normalize(arr=CT_numpy)
+                CT_numpy = MyDataset.zscore_brain(arr=CT_numpy)
                 input_numpy_list.append(CT_numpy)
 
         input_numpy_list = np.array(input_numpy_list)  # (num_modalities, Z, Y, X)
@@ -238,6 +246,7 @@ def find_folders_with_specific_files(folder_path, required_files):
             matching_folders.append(subfolder)
 
     return matching_folders
+
 
 
 
