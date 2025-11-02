@@ -212,7 +212,7 @@ class EncoderBranch(nn.Module):
         return [o_high,o_medium,o_low]
 
 class AttnBlock(nn.Module):
-    def __init__(self, in_channels, head=32):
+    def __init__(self, in_channels, head=8):
         super().__init__()
         self.in_channels = in_channels
         self.head = head
@@ -425,6 +425,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
