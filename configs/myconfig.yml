@@ -5,7 +5,7 @@ data:
   persistent_workers: true
   # Optional central-slice training filter (patch below)
   train_central_slices:   # if null, use all; otherwise keep central N slices per volume
-    enabled: true
+    enabled: false
     count: 96             # e.g., keep central 96 slices per subject per epoch
 
 model:
@@ -33,12 +33,15 @@ training:
   max_minutes: 75         # wall clock safeguard
   mixed_precision: true   # AMP switch (patch below)
   log_every: 100          # console logging cadence (patch below)
+  warmup_steps: 2000
+  ema_decay: 0.999
 
 sampling:
   batch_size: 8
   last_only: True
   timestep_stride: 10     # ≈1000/10 = 100 denoise steps (fast but decent)
-  max_slices: 32          # take central 32 slices per subject during sampling
+  max_slices: null          # take central 32 slices per subject during sampling
+  guidance_scale: 2.0   # 1.0 = normal, 2–3 = stronger conditioning
 
 optim:
     weight_decay: 0.000
@@ -47,6 +50,7 @@ optim:
     beta1: 0.9
     amsgrad: false
     eps: 0.00000001
+    grad_clip: 1.0 
 
 
 pet:
