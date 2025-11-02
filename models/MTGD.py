@@ -215,67 +215,48 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels, head=8):
         super().__init__()
         self.in_channels = in_channels
-        self.head = 8
+        self.head = head  # 256 / 8 = 32 channels per head
 
-        self.norm = Normalize(in_channels)
-        self.q = torch.nn.Conv2d(in_channels,
-                                 in_channels,
-                                 kernel_size=1,
-                                 stride=1,
-                                 padding=0)
-        self.k = torch.nn.Conv2d(in_channels,
-                                 in_channels,
-                                 kernel_size=1,
-                                 stride=1,
-                                 padding=0)
-        self.v = torch.nn.Conv2d(in_channels,
-                                 in_channels,
-                                 kernel_size=1,
-                                 stride=1,
-                                 padding=0)
-        self.proj_out = torch.nn.Conv2d(in_channels,
-                                        in_channels,
-                                        kernel_size=1,
-                                        stride=1,
-                                        padding=0)
+        # Separate normalizations for query and key/value
+        self.norm_q = Normalize(in_channels)
+        self.norm_kv = Normalize(in_channels)
+
+        # QKV projections
+        self.q = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.k = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.v = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+        self.proj_out = nn.Conv2d(in_channels, in_channels, kernel_size=1)
 
     def forward(self, x, kv):
-        # Normalize inputs
-        h_ = self.norm(x)
-        kv = self.norm(kv)
-    
-        # Linear projections for q, k, v
-        q = self.q(h_)
-        k = self.k(kv)
-        v = self.v(kv)
-    
-        # Compute attention dimensions
+        # Normalize independently
+        q_in = self.norm_q(x)
+        kv_in = self.norm_kv(kv)
+
+        # Project to Q, K, V
+        q = self.q(q_in)
+        k = self.k(kv_in)
+        v = self.v(kv_in)
+
         b, c, h, w = q.shape
         head = self.head if c % self.head == 0 else 1
         c_per_head = c // head
 
-        if not hasattr(self, "_warned"):
-            print(f"[DEBUG] AttnBlock input shape: {q.shape}, head={self.head}")
-            self._warned = True
-
-    
         # Reshape safely for multi-head attention
         q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)  # (B*H, HW, C/H)
         k = k.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
         v = v.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
-    
-        # Compute attention weights
-        attn = torch.bmm(q, k) * (c_per_head ** -0.5)  # scale by per-head dim
+
+        # Compute scaled dot-product attention
+        attn = torch.bmm(q, k) * (c_per_head ** -0.5)
         attn = torch.softmax(attn, dim=2)
-    
-        # Apply attention to values
+
+        # Apply attention
         out = torch.bmm(v, attn.permute(0, 2, 1))
         out = out.reshape(b, c, h, w)
-    
-        # Output projection + residual
+
+        # Output projection and residual
         out = self.proj_out(out)
         return x + out
-
 
 class Encoder(nn.Module):
     def __init__(self,config,tm_ch):
@@ -436,6 +417,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
