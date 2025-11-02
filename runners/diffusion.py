@@ -357,16 +357,46 @@ class Diffusion(object):
              f"batch={config.training.batch_size}, lr={config.optim.lr}, "
              f"modalities={config.model.num_input_modality}, sequences={list(config.mri.mri_sequence)}")
 
-        # load parameters
-        try:
-            states = torch.load(
-                os.path.join(self.args.log_path, "ckpt.pth"),
-                map_location=self.config.device,
-            )
-            model.load_state_dict(states[0], strict=True)
-        except Exception:
-            logging.info('could not load parameters')
+        # # load parameters
+        # try:
+        #     states = torch.load(
+        #         os.path.join(self.args.log_path, "ckpt.pth"),
+        #         map_location=self.config.device,
+        #     )
+        #     model.load_state_dict(states[0], strict=True)
+        # except Exception:
+        #     logging.info('could not load parameters')
+        #     exit()
+        
+        # --- Debug checkpoint loading 2/11/25 ---
+        ckpt_path = os.path.join(self.args.log_path, "ckpt.pth")
+        logging.info(f"[DEBUG] Trying to load checkpoint from: {ckpt_path}")
+        
+        if not os.path.exists(ckpt_path):
+            logging.error(f"[ERROR] Checkpoint not found at: {ckpt_path}")
             exit()
+        
+        try:
+            states = torch.load(ckpt_path, map_location=self.config.device)
+            logging.info(f"[DEBUG] Checkpoint loaded successfully. Keys: {list(states.keys()) if isinstance(states, dict) else type(states)}")
+        
+            # handle both dict and list formats
+            if isinstance(states, dict) and "model" in states:
+                model.load_state_dict(states["model"], strict=False)
+            elif isinstance(states, (list, tuple)):
+                model.load_state_dict(states[0], strict=False)
+            else:
+                model.load_state_dict(states, strict=False)
+        
+            logging.info("[DEBUG] Model weights loaded successfully!")
+        
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to load checkpoint: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            exit()
+
+
 
         model = model.to(self.device)
         logging.info('loading parameters successfully')
@@ -550,6 +580,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
