@@ -61,3 +61,47 @@ def ddpm_steps(x, seq, model, b, condition, pet_type_batch, guidance_scale=2.0, 
             xs.append(sample.to("cpu"))
 
     return xs, x0_preds
+
+# --- Fallback deterministic DDIM sampler ---
+def ddim_steps(x, seq, model, b, condition, pet_type_batch, eta=0.0, **kwargs):
+    """
+    Simplified DDIM sampling fallback using DDPM logic if DDIM is unavailable.
+    eta controls stochasticity: eta=0 → deterministic, eta>0 → slightly noisy.
+    """
+    with torch.no_grad():
+        n = x.size(0)
+        seq_next = [-1] + list(seq[:-1])
+        xs = [x]
+        x0_preds = []
+        betas = b
+
+        for i, j in zip(reversed(seq), reversed(seq_next)):
+            t = (torch.ones(n) * i).to(x.device)
+            next_t = (torch.ones(n) * j).to(x.device)
+            at = compute_alpha(betas, t.long())
+            atm1 = compute_alpha(betas, next_t.long())
+            beta_t = 1 - at / atm1
+
+            x = xs[-1].to(x.device)
+            e = model(x, t.float(), condition, pet_type_batch)
+
+            # Predicted x0 (clean image)
+            x0_from_e = (x - (1 - at).sqrt() * e) / at.sqrt()
+            x0_from_e = torch.clamp(x0_from_e, -1, 1)
+            x0_preds.append(x0_from_e.cpu())
+
+            # Deterministic DDIM step
+            sigma_t = eta * torch.sqrt((1 - atm1) / (1 - at) * beta_t)
+            c = torch.sqrt(1 - atm1 - sigma_t ** 2)
+
+            mean = atm1.sqrt() * x0_from_e + c * e
+            if eta > 0:
+                noise = torch.randn_like(x)
+                x_next = mean + sigma_t * noise
+            else:
+                x_next = mean
+
+            xs.append(x_next.cpu())
+
+    return xs, x0_preds
+
