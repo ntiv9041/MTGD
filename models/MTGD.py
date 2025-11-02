@@ -368,7 +368,9 @@ class Model(nn.Module):
 
         # match channel width to number of MRI modalities
         attn_ch = 512 // (3 // config.model.num_input_modality)
-        self.atten = AttnBlock(attn_ch)
+        self.kv_proj = nn.Conv2d(attn_ch, 512, kernel_size=1) if attn_ch < 512 else nn.Identity()
+        self.atten = AttnBlock(512)
+
 
 
         self.inc = DoubleConv(n_channels, self.ch)
@@ -410,12 +412,9 @@ class Model(nn.Module):
         x4 = self.down3(x3)
         x4 = self.R2(x4,emb) + e_out[1]
         x5 = self.down4(x4)
-        # >>> Fix for variable number of MRI sequences (2 or 3) <<<
-        if len(e_out) >= 3:
-            x5 = self.atten(x5, e_out[2])
-        else:
-            # fallback: average or reuse last encoder feature
-            x5 = self.atten(x5, e_out[-1])
+        # Project deepest encoder feature to match bottleneck (always 512ch for attention)
+        kv = self.kv_proj(e_out[-1])
+        x5 = self.atten(x5, kv)
 
         x = self.up1(x5)+x4
         x = self.R3(x,emb) + e_out[1]
@@ -425,6 +424,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
