@@ -240,31 +240,37 @@ class AttnBlock(nn.Module):
                                         padding=0)
 
     def forward(self, x, kv):
-        h_ = x
-        h_, kv = self.norm(h_), self.norm(kv)
+        # Normalize inputs
+        h_ = self.norm(x)
+        kv = self.norm(kv)
+    
+        # Linear projections for q, k, v
         q = self.q(h_)
         k = self.k(kv)
         v = self.v(kv)
-
-        # compute attention
+    
+        # Compute attention dimensions
         b, c, h, w = q.shape
-        q = q.reshape(b * self.head, c // self.head, h * w)
-        q = q.permute(0, 2, 1)  # b,hw,c
-        k = k.reshape(b * self.head, c // self.head, h * w)  # b,c,hw
-        w_ = torch.bmm(q, k)  # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
-        w_ = w_ * (int(c) ** (-0.5))
-        w_ = torch.nn.functional.softmax(w_, dim=2)
+        head = self.head if c % self.head == 0 else 1
+        c_per_head = c // head
+    
+        # Reshape safely for multi-head attention
+        q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)  # (B*H, HW, C/H)
+        k = k.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
+        v = v.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
+    
+        # Compute attention weights
+        attn = torch.bmm(q, k) * (c_per_head ** -0.5)  # scale by per-head dim
+        attn = torch.softmax(attn, dim=2)
+    
+        # Apply attention to values
+        out = torch.bmm(v, attn.permute(0, 2, 1))
+        out = out.reshape(b, c, h, w)
+    
+        # Output projection + residual
+        out = self.proj_out(out)
+        return x + out
 
-        # attend to values
-        v = v.reshape(b * self.head, c // self.head, h * w)
-        w_ = w_.permute(0, 2, 1)  # b,hw,hw (first hw of k, second of q)
-        # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
-        h_ = torch.bmm(v, w_)
-        h_ = h_.reshape(b, c, h, w)
-
-        h_ = self.proj_out(h_)
-
-        return x + h_
 
 class Encoder(nn.Module):
     def __init__(self,config,tm_ch):
@@ -425,6 +431,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
