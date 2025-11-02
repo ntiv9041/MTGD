@@ -93,6 +93,10 @@ class Diffusion(object):
 
     def train(self):
         args, config = self.args, self.config
+        # >>> logging for hyperparams 2/11/25 <<<
+        logging.info(f"[CONFIG] img_size? (handled in data), T={config.diffusion.num_diffusion_timesteps}, "
+             f"batch={config.training.batch_size}, lr={config.optim.lr}, "
+             f"modalities={config.model.num_input_modality}, sequences={list(config.mri.mri_sequence)}")
 
         # DataLoader with perf knobs from config.data
         train_loader = load_data(
@@ -326,6 +330,10 @@ class Diffusion(object):
     def sample(self):
         args, config = self.args, self.config
         model = Model(self.config).to(self.device)
+        # >>> logging for hyperparams 2/11/25 <<<
+        logging.info(f"[CONFIG] img_size? (handled in data), T={config.diffusion.num_diffusion_timesteps}, "
+             f"batch={config.training.batch_size}, lr={config.optim.lr}, "
+             f"modalities={config.model.num_input_modality}, sequences={list(config.mri.mri_sequence)}")
 
         # load parameters
         try:
@@ -502,6 +510,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
