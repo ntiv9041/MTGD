@@ -404,7 +404,13 @@ class Model(nn.Module):
         x4 = self.down3(x3)
         x4 = self.R2(x4,emb) + e_out[1]
         x5 = self.down4(x4)
-        x5 = self.atten(x5, e_out[2])
+        # >>> Fix for variable number of MRI sequences (2 or 3) <<<
+        if len(e_out) >= 3:
+            x5 = self.atten(x5, e_out[2])
+        else:
+            # fallback: average or reuse last encoder feature
+            x5 = self.atten(x5, e_out[-1])
+
         x = self.up1(x5)+x4
         x = self.R3(x,emb) + e_out[1]
         x = self.up2(x)+x3
@@ -413,4 +419,5 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
