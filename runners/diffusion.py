@@ -219,8 +219,15 @@ class Diffusion(object):
                     step += 1
 
                     # >> Changes for Colab A100 2/11/25<<<
-                    mini_labels = mini_labels.to(self.device).float().to(memory_format=torch.channels_last)
-                    mini_inputs = mini_inputs.to(self.device).float().to(memory_format=torch.channels_last)
+                    mini_labels = mini_labels.to(self.device).float()
+                    mini_inputs = mini_inputs.to(self.device).float()
+                    
+                    # Apply channels_last only if 4D (N, C, H, W)
+                    if mini_labels.dim() == 4:
+                        mini_labels = mini_labels.to(memory_format=torch.channels_last)
+                    if mini_inputs.dim() == 4:
+                        mini_inputs = mini_inputs.to(memory_format=torch.channels_last)
+
                     pet_type_batch = pet_type.to(self.device).float().repeat_interleave(n)
                     if step == 1:
                         logging.info(f"[Batch stats] inputs shape={mini_inputs.shape}, labels shape={mini_labels.shape}, "
@@ -543,6 +550,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
