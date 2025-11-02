@@ -8,6 +8,7 @@ import sys
 import cv2
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
+torch.backends.cudnn.benchmark = True
 
 sys.path.append('..')
 from models.MTGD import Model
@@ -217,8 +218,9 @@ class Diffusion(object):
                     data_time += time.time() - data_start
                     step += 1
 
-                    mini_labels = mini_labels.to(self.device).float()
-                    mini_inputs = mini_inputs.to(self.device).float()
+                    # >> Changes for Colab A100 2/11/25<<<
+                    mini_labels = mini_labels.to(self.device).float().to(memory_format=torch.channels_last)
+                    mini_inputs = mini_inputs.to(self.device).float().to(memory_format=torch.channels_last)
                     pet_type_batch = pet_type.to(self.device).float().repeat_interleave(n)
 
                     e = torch.randn_like(mini_labels)
@@ -510,6 +512,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
