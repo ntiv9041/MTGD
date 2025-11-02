@@ -241,6 +241,11 @@ class AttnBlock(nn.Module):
         head = self.head if c % self.head == 0 else 1
         c_per_head = c // head
 
+        if not hasattr(self, "_warned"):
+            print(f"[DEBUG] AttnBlock input shape: {q.shape}, head={self.head}")
+            self._warned = True
+
+
         # Reshape safely for multi-head attention
         q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)  # (B*H, HW, C/H)
         k = k.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
@@ -417,6 +422,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
