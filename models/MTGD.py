@@ -368,8 +368,8 @@ class Model(nn.Module):
 
         # Only project the encoder feature; x5 is already 512-ch
         self.q_proj = nn.Identity()
-        self.kv_proj = nn.Conv2d(256, 512, kernel_size=1)
-        self.atten = AttnBlock(512)
+        self.kv_proj = nn.Identity()
+        self.atten = AttnBlock(256)
 
 
 
@@ -380,8 +380,8 @@ class Model(nn.Module):
         self.down3 = Down(128, 256)
         self.R2 = ResnetBlock(256, 256, self.ch, dropout=False)
         factor = 2 if bilinear else 1
-        self.down4 = Down(256, 512 // factor)
-        self.up1 = Upsample(512,256)
+        self.down4 = Down(256, 256 // factor)
+        self.up1 = Upsample(256,256)
         self.R3 = ResnetBlock(256, 256, self.ch, dropout=False)
         self.up2 = Upsample(256,128)
         self.R4 = ResnetBlock(128, 128, self.ch, dropout=False)
@@ -425,6 +425,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
