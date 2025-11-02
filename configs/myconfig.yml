@@ -16,7 +16,7 @@ model:
     ch: 128
     dropout: 0.0
     var_type: fixedsmall
-    num_input_modality: 3
+    num_input_modality: 2
 
 diffusion:
     beta_schedule: linear
@@ -55,7 +55,8 @@ pet:
 
 mri:
     # mri types as conditional input
-    mri_sequence: ['T2_ISO_BFC_normalised_brain.nii.gz','FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz', 'T1_ISO_BFC_rigid_normalised_brain.nii.gz']
+    # mri_sequence: ['T2_ISO_BFC_normalised_brain.nii.gz','FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz', 'T1_ISO_BFC_rigid_normalised_brain.nii.gz']
+    mri_sequence: ['T2_ISO_BFC_normalised_brain.nii.gz','FLAIR_ISO_BFC_rigid_normalised_brain.nii.gz']
 
 folder_path:
     path : "/content/data/Data"
