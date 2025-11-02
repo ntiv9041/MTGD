@@ -203,7 +203,7 @@ class EncoderBranch(nn.Module):
         )
         
         self.model_medium = Down(128, 256)
-        self.model_low = Down(256, 512)
+        self.model_low = Down(256, 256)
 
     def forward(self, x):
         o_high = self.model_high(x)
@@ -285,7 +285,7 @@ class Encoder(nn.Module):
             self.Res_list.append(ResnetBlock(temp_ch,temp_ch,tm_ch,False))
             self.Gather_list.append(DoubleConv(temp_ch * self.num_m,temp_ch))
             # determine base channel width for this stage
-            attn_ch = 512 // (3 // self.num_m)  # 512→256 when num_m=2, keeps 512 if num_m=3
+            attn_ch = 256
             self.Atten_list.append(AttnBlock(attn_ch))
             self.DownC_list.append(torch.nn.Conv2d(attn_ch * (self.num_m - 1),
                                                    attn_ch,
@@ -425,6 +425,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
