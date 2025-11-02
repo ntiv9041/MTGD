@@ -215,7 +215,7 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels, head=8):
         super().__init__()
         self.in_channels = in_channels
-        self.head = head
+        self.head = 8
 
         self.norm = Normalize(in_channels)
         self.q = torch.nn.Conv2d(in_channels,
@@ -425,6 +425,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
