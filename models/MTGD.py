@@ -231,38 +231,45 @@ class AttnBlock(nn.Module):
         # Normalize independently
         q_in = self.norm_q(x)
         kv_in = self.norm_kv(kv)
-
-        # Linear projections (keep channel width the same on both paths)
-        q = self.q(q_in)   # [B, C, H, W]
-        k = self.k(kv_in)  # [B, C, H, W]
-        v = self.v(kv_in)  # [B, C, H, W]
-
+    
+        # Project to Q, K, V
+        q = self.q(q_in)      # [B, C, Hq, Wq]
+        k = self.k(kv_in)     # [B, C, Hk, Wk]
+        v = self.v(kv_in)     # [B, C, Hk, Wk]
+    
         b, c, h, w = q.shape
+        hk, wk = k.shape[2], k.shape[3]
+    
+        # 🔧 NEW: align K/V spatial size to Q (critical fix)
+        if (hk != h) or (wk != w):
+            k = F.adaptive_avg_pool2d(k, (h, w))
+            v = F.adaptive_avg_pool2d(v, (h, w))
+    
         head = self.head if (c % self.head) == 0 else 1
         c_per_head = c // head
-
+    
         # Optional one-time debug
-        if not hasattr(self, "_dbg"):
-            print(f"[DEBUG] AttnBlock q={q.shape}, k={k.shape}, v={v.shape}, head={head}")
-            self._dbg = True
-
-        # --- Reshape for multi-head attention ---
-        # q: (B*H, HW, C/H), k: (B*H, C/H, HW), v: (B*H, C/H, HW)
-        q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)
-        k = k.reshape(b * head, c_per_head, h * w)
-        v = v.reshape(b * head, c_per_head, h * w)
-
+        if not hasattr(self, "_dbg_spatial"):
+            print(f"[DEBUG] MHA shapes after align: q={q.shape}, k={k.shape}, v={v.shape}, head={head}")
+            self._dbg_spatial = True
+    
+        # Reshape for multi-head attention
+        q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)  # (B*H, HW, C/H)
+        k = k.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
+        v = v.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
+    
         # Scaled dot-product attention
         attn = torch.bmm(q, k) * (c_per_head ** -0.5)
-        attn = torch.softmax(attn, dim=2)  # (B*H, HW, HW)
-
-        # Apply attention to values
+        attn = torch.softmax(attn, dim=2)
+    
+        # Apply attention
         out = torch.bmm(v, attn.permute(0, 2, 1))  # (B*H, C/H, HW)
         out = out.reshape(b, c, h, w)
-
+    
         # Output projection + residual
         out = self.proj_out(out)
         return x + out
+
 
 
 class Encoder(nn.Module):
@@ -424,6 +431,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
