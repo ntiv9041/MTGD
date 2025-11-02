@@ -284,12 +284,15 @@ class Encoder(nn.Module):
             self.Enc_list.append(EncoderBranch())
             self.Res_list.append(ResnetBlock(temp_ch,temp_ch,tm_ch,False))
             self.Gather_list.append(DoubleConv(temp_ch * self.num_m,temp_ch))
-            self.Atten_list.append(AttnBlock(512))
-            self.DownC_list.append(torch.nn.Conv2d(512 * (self.num_m-1),
-                                 512,
-                                 kernel_size=1,
-                                 stride=1,
-                                 padding=0))
+            # determine base channel width for this stage
+            attn_ch = 512 // (3 // self.num_m)  # 512→256 when num_m=2, keeps 512 if num_m=3
+            self.Atten_list.append(AttnBlock(attn_ch))
+            self.DownC_list.append(torch.nn.Conv2d(attn_ch * (self.num_m - 1),
+                                                   attn_ch,
+                                                   kernel_size=1,
+                                                   stride=1,
+                                                   padding=0))
+
 
 
 
@@ -363,7 +366,10 @@ class Model(nn.Module):
                             self.ch//2),
         ])
 
-        self.atten = AttnBlock(512)
+        # match channel width to number of MRI modalities
+        attn_ch = 512 // (3 // config.model.num_input_modality)
+        self.atten = AttnBlock(attn_ch)
+
 
         self.inc = DoubleConv(n_channels, self.ch)
         self.down1 = Down(64, 128)
@@ -419,5 +425,6 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
