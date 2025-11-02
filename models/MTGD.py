@@ -366,9 +366,11 @@ class Model(nn.Module):
                             self.ch//2),
         ])
 
-        # Always project deepest encoder feature (256ch) → 512ch for bottleneck attention
+        # Force both attention inputs (x5 and kv) to 512 channels
+        self.q_proj = nn.Conv2d(256, 512, kernel_size=1)  # for x5 if needed
         self.kv_proj = nn.Conv2d(256, 512, kernel_size=1)
         self.atten = AttnBlock(512)
+
 
         self.inc = DoubleConv(n_channels, self.ch)
         self.down1 = Down(64, 128)
@@ -409,7 +411,8 @@ class Model(nn.Module):
         x4 = self.down3(x3)
         x4 = self.R2(x4,emb) + e_out[1]
         x5 = self.down4(x4)
-        # Project deepest encoder feature to match bottleneck (always 512ch for attention)
+        # Project both query and key/value to 512ch before attention
+        x5 = self.q_proj(x5)
         kv = self.kv_proj(e_out[-1])
         x5 = self.atten(x5, kv)
 
@@ -421,6 +424,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
