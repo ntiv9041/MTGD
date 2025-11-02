@@ -366,10 +366,11 @@ class Model(nn.Module):
                             self.ch//2),
         ])
 
-        # Force both attention inputs (x5 and kv) to 512 channels
-        self.q_proj = nn.Conv2d(256, 512, kernel_size=1)  # for x5 if needed
+        # Only project the encoder feature; x5 is already 512-ch
+        self.q_proj = nn.Identity()
         self.kv_proj = nn.Conv2d(256, 512, kernel_size=1)
         self.atten = AttnBlock(512)
+
 
 
         self.inc = DoubleConv(n_channels, self.ch)
@@ -424,6 +425,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
