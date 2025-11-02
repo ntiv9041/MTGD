@@ -215,9 +215,9 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels, head=8):
         super().__init__()
         self.in_channels = in_channels
-        self.head = head  # 256 / 8 = 32 channels per head
+        self.head = head  # For 256ch, head=8 -> 32 per-head
 
-        # Separate normalizations for query and key/value
+        # Separate norms: critical to keep Q and KV channel stats independent
         self.norm_q = Normalize(in_channels)
         self.norm_kv = Normalize(in_channels)
 
@@ -232,36 +232,38 @@ class AttnBlock(nn.Module):
         q_in = self.norm_q(x)
         kv_in = self.norm_kv(kv)
 
-        # Project to Q, K, V
-        q = self.q(q_in)
-        k = self.k(kv_in)
-        v = self.v(kv_in)
+        # Linear projections (keep channel width the same on both paths)
+        q = self.q(q_in)   # [B, C, H, W]
+        k = self.k(kv_in)  # [B, C, H, W]
+        v = self.v(kv_in)  # [B, C, H, W]
 
         b, c, h, w = q.shape
-        head = self.head if c % self.head == 0 else 1
+        head = self.head if (c % self.head) == 0 else 1
         c_per_head = c // head
 
-        if not hasattr(self, "_warned"):
-            print(f"[DEBUG] AttnBlock input shape: {q.shape}, head={self.head}")
-            self._warned = True
+        # Optional one-time debug
+        if not hasattr(self, "_dbg"):
+            print(f"[DEBUG] AttnBlock q={q.shape}, k={k.shape}, v={v.shape}, head={head}")
+            self._dbg = True
 
+        # --- Reshape for multi-head attention ---
+        # q: (B*H, HW, C/H), k: (B*H, C/H, HW), v: (B*H, C/H, HW)
+        q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)
+        k = k.reshape(b * head, c_per_head, h * w)
+        v = v.reshape(b * head, c_per_head, h * w)
 
-        # Reshape safely for multi-head attention
-        q = q.reshape(b * head, c_per_head, h * w).permute(0, 2, 1)  # (B*H, HW, C/H)
-        k = k.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
-        v = v.reshape(b * head, c_per_head, h * w)                   # (B*H, C/H, HW)
-
-        # Compute scaled dot-product attention
+        # Scaled dot-product attention
         attn = torch.bmm(q, k) * (c_per_head ** -0.5)
-        attn = torch.softmax(attn, dim=2)
+        attn = torch.softmax(attn, dim=2)  # (B*H, HW, HW)
 
-        # Apply attention
-        out = torch.bmm(v, attn.permute(0, 2, 1))
+        # Apply attention to values
+        out = torch.bmm(v, attn.permute(0, 2, 1))  # (B*H, C/H, HW)
         out = out.reshape(b, c, h, w)
 
-        # Output projection and residual
+        # Output projection + residual
         out = self.proj_out(out)
         return x + out
+
 
 class Encoder(nn.Module):
     def __init__(self,config,tm_ch):
@@ -422,6 +424,7 @@ class Model(nn.Module):
         x = self.up4(x)+x1
         logits = self.outc(x)
         return logits
+
 
 
 
