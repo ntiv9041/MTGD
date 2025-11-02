@@ -222,6 +222,14 @@ class Diffusion(object):
                     mini_labels = mini_labels.to(self.device).float().to(memory_format=torch.channels_last)
                     mini_inputs = mini_inputs.to(self.device).float().to(memory_format=torch.channels_last)
                     pet_type_batch = pet_type.to(self.device).float().repeat_interleave(n)
+                    if step == 1:
+                        logging.info(f"[Batch stats] inputs shape={mini_inputs.shape}, labels shape={mini_labels.shape}, "
+                                     f"pet_type (first 4)={pet_type_batch[:4].tolist()}")
+                        logging.info(f"[Norm check] mini_inputs mean={mini_inputs.mean().item():.3f}, "
+                                     f"std={mini_inputs.std().item():.3f}; "
+                                     f"mini_labels min={mini_labels.min().item():.3f}, "
+                                     f"max={mini_labels.max().item():.3f}")
+                                    
                     # Optional: drop tracer condition with small prob
                     p_uncond = float(getattr(self.config, "p_uncond", 0.1))
                     if p_uncond > 0.0:
@@ -535,6 +543,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
