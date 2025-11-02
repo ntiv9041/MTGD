@@ -500,8 +500,14 @@ class Diffusion(object):
         # Use a stride to cut the number of denoising steps (e.g., 10 -> ~100 steps if T=1000).
         skip = getattr(self.config.sampling, 'timestep_stride', 1)
         seq = range(0, self.num_timesteps, skip)
-        from functions.denoising import ddpm_steps
-        _, x = ddpm_steps(x, seq, model, self.betas, condition, pet_type_batch)
+        # >>> Choose sampler based on config 2/11/25 <<<
+        stride = int(getattr(self.config.sampling, "timestep_stride", 10))
+        if stride <= 1:
+            from functions.denoising import ddpm_steps
+            _, x = ddpm_steps(x, seq, model, self.betas, condition, pet_type_batch)
+        else:
+            from functions.denoising import ddim_steps
+            _, x = ddim_steps(x, seq, model, self.betas, condition, pet_type_batch)
         return x[-1]
 
     def save_img(self, imgs, p_idx, idx):
@@ -512,6 +518,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
