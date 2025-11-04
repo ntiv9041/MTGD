@@ -119,6 +119,11 @@ def main():
             if idx is None or idx >= len(vol_slices):
                 break
             pred = load_png(png_path)
+            
+            # --- Crop to top half only (generated PET) ---
+            h = pred.shape[0] // 2
+            pred = pred[:h, :]  # Keep top half only
+
             gt = vol_slices[idx]
             gt = robust_minmax(gt, args.lowq, args.highq)
             gt = resize_slice(gt, pred.shape)
