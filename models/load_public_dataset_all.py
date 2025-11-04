@@ -7,6 +7,13 @@ import nibabel as nib
 import SimpleITK as sitk
 import random
 
+def robust_minmax(x, pmin=1, pmax=99):
+    """Percentile-based min-max normalization, avoids outliers."""
+    import numpy as np
+    lo, hi = np.percentile(x, [pmin, pmax])
+    x = np.clip((x - lo) / (hi - lo + 1e-6), 0, 1)
+    return x
+
 
 def split_and_label(final_pet_lists, train_ratio=0.8):
     train_set = []
@@ -132,7 +139,7 @@ class MyDataset(Dataset):
         # Load PET label (target)
         labels_nii = nib.load(pet_path)
         label_np = labels_nii.get_fdata().astype(np.float32)
-        label_np = self.min_max_normalize(label_np)
+        label_np = robust_minmax(label_np)   # replaced normalization
         label = torch.from_numpy(label_np)
 
         # Load MRI inputs; replace missing paths with zeros matching PET shape
@@ -143,7 +150,7 @@ class MyDataset(Dataset):
             else:
                 mri_nii = nib.load(mri_path)
                 mri_np = mri_nii.get_fdata().astype(np.float32)
-                mri_np = self.zscore_brain(mri_np)
+                mri_np = robust_minmax(mri_np)  # same normalization for MRI
                 input_np_list.append(mri_np)
 
         inputs = torch.from_numpy(np.array(input_np_list, dtype=np.float32))  # (M, Z, Y, X)
@@ -168,6 +175,10 @@ class MyDataset(Dataset):
             return np.zeros_like(arr, dtype=np.float32)
         return ((arr - min_val) / (max_val - min_val)).astype(np.float32)
 
+    @staticmethod
+    def get_brain_mask(volume, threshold=0.05):
+        """Simple binary mask for non-background voxels."""
+        return (volume > threshold * volume.max()).astype(np.float32)
 
 
 class MyDatasetTest(Dataset):
@@ -184,20 +195,20 @@ class MyDatasetTest(Dataset):
 
         # Load PET label volume
         labels_nii = nib.load(pet_path)
-        Mask_numpy = labels_nii.get_fdata()
-        Mask_numpy = MyDataset.min_max_normalize(arr=Mask_numpy)  # reuse static method
+        Mask_numpy = labels_nii.get_fdata().astype(np.float32)
+        Mask_numpy = robust_minmax(Mask_numpy)  # replaced normalization
         label = torch.from_numpy(Mask_numpy)
-
-        # Load MRI condition volumes
+        
         input_numpy_list = []
         for p in mri_list:
             if len(p) == 0:
                 input_numpy_list.append(np.zeros_like(Mask_numpy))
             else:
                 CT_nii = nib.load(p)
-                CT_numpy = CT_nii.get_fdata()
-                CT_numpy = MyDataset.zscore_brain(arr=CT_numpy)
+                CT_numpy = CT_nii.get_fdata().astype(np.float32)
+                CT_numpy = robust_minmax(CT_numpy)  # replaced normalization
                 input_numpy_list.append(CT_numpy)
+
 
         input_numpy_list = np.array(input_numpy_list)  # (num_modalities, Z, Y, X)
         inputs = torch.from_numpy(input_numpy_list)
@@ -246,6 +257,7 @@ def find_folders_with_specific_files(folder_path, required_files):
             matching_folders.append(subfolder)
 
     return matching_folders
+
 
 
 
