@@ -3,43 +3,96 @@ import torch.nn.functional as F
 from torchmetrics.functional import structural_similarity_index_measure as ssim
 
 
-# model,x0,t,noise,beta
-def noise_estimation_loss(model,
-                          x0: torch.Tensor,
-                          t: torch.LongTensor,
-                          e: torch.Tensor,
-                          b: torch.Tensor, condition,pet_type,keepdim=False,loss_moment=False):
+# --------------------------------------------------------
+# Helper: Create simple PET brain mask
+# --------------------------------------------------------
+def create_brain_mask(x, threshold=0.05):
+    """
+    Create a binary brain mask from PET (or MRI-like) input.
+    Ignores background and focuses loss on tissue region.
+    """
+    with torch.no_grad():
+        # mask = (x > threshold * x.max(dim=(-1, -2), keepdim=True).values).float()
+        mask = (x > threshold * x.max()).float()
+    return mask
+
+
+# --------------------------------------------------------
+# Main diffusion noise estimation loss (with masking)
+# --------------------------------------------------------
+def noise_estimation_loss(
+    model,
+    x0: torch.Tensor,
+    t: torch.LongTensor,
+    e: torch.Tensor,
+    b: torch.Tensor,
+    condition,
+    pet_type,
+    keepdim=False,
+    loss_moment=False,
+    mask=None,
+):
+    """
+    Combined masked diffusion loss:
+      - Predicts added noise (eps)
+      - Uses MSE + SSIM hybrid objective
+      - Optionally applies a PET brain mask to focus on relevant voxels
+    """
     # alpha cumprod
-    a = (1-b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
-    # get xt
+    a = (1 - b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
+
+    # generate noisy sample x_t
     x = x0 * a.sqrt() + e * (1.0 - a).sqrt()
-    # predict noise from xt and t
-    output = model(x, t.float(),condition,pet_type)
+
+    # model predicts noise
+    output = model(x, t.float(), condition, pet_type)
+
+    # raw noise estimation error
+    err = (e - output)
+
+    # --------------------------------------------------------
+    # optional shape handling for debugging
+    # --------------------------------------------------------
     if keepdim:
-        return (e - output).square().sum(dim=(1, 2, 3))
+        return err.square().sum(dim=(1, 2, 3))
     if loss_moment:
-        return (e - output).square().mean(dim=list(range(1, len(output.shape))))
-        # return (e - output).square().sum(dim=(1, 2, 3)).mean(dim=1)
+        return err.square().mean(dim=list(range(1, len(output.shape))))
+
+    # --------------------------------------------------------
+    # Masked MSE region loss
+    # --------------------------------------------------------
+    mse_map = err.square()
+    if mask is not None:
+        mse_map = mse_map * mask
+        denom = mask.sum() + 1e-6
+        mse = mse_map.sum() / denom
     else:
-        # ---- combined L1 + SSIM loss ----
-        # Compute predicted noise and target noise difference
-        mse = (e - output).square().mean(dim=(1, 2, 3))   # per-sample MSE
+        mse = mse_map.mean()
 
-        # Reconstruct predicted x0 for SSIM: x0_pred = (xt - sqrt(1-a)*eps_pred) / sqrt(a)
-        a_sqrt = a.sqrt()
-        x0_pred = (x - (1.0 - a).sqrt() * output) / a_sqrt
+    # --------------------------------------------------------
+    # Structural Similarity on predicted x0
+    # --------------------------------------------------------
+    a_sqrt = a.sqrt()
+    x0_pred = (x - (1.0 - a).sqrt() * output) / a_sqrt
+    x0_pred = torch.clamp(x0_pred, 0.0, 1.0)
+    x0_true = torch.clamp(x0, 0.0, 1.0)
 
-        # Clamp to [0,1] before SSIM to avoid NaNs
-        x0_pred = torch.clamp(x0_pred, 0.0, 1.0)
-        x0_true = torch.clamp(x0, 0.0, 1.0)
-
+    try:
         ssim_val = ssim(x0_pred, x0_true, data_range=1.0)
+    except Exception:
+        ssim_val = torch.tensor(0.0, device=x0.device)
 
-        # Weighted blend: 84% L1/MSE term + 16% SSIM structure term
-        loss = 0.84 * mse.mean() + 0.16 * (1.0 - ssim_val)
+    # --------------------------------------------------------
+    # Weighted blend
+    # --------------------------------------------------------
+    loss = 0.84 * mse + 0.16 * (1.0 - ssim_val)
 
-        return loss
+    return loss
 
+
+# --------------------------------------------------------
+# Loss registry (keeps consistency with runner)
+# --------------------------------------------------------
 loss_registry = {
-    'simple': noise_estimation_loss,
+    "simple": noise_estimation_loss,
 }
