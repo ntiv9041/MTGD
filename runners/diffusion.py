@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import sys
 import cv2
+import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 torch.backends.cudnn.benchmark = True
@@ -320,6 +321,18 @@ class Diffusion(object):
                             f"w_loss={w_loss:.6f} data_time={data_time/(i+1):.4f}s"
                         )
 
+                    # --- Save visual preview every 2000 steps ---
+                    if step % 2000 == 0:
+                        visualize_training_preview(
+                            step,
+                            ema_model,
+                            mini_inputs,
+                            mini_labels,
+                            brain_mask,
+                            self.args.image_folder
+                        )
+                        logging.info(f"[Preview] Saved visualization at step {step}")
+
                     # checkpointing
                     if step % self.config.training.snapshot_freq == 0 or step == 1:
                         # >>> 2/11/25 <<<
@@ -591,6 +604,40 @@ class Diffusion(object):
             idx += 1
         return idx
 
+    # ---- helper function visualization
+    def visualize_training_preview(step, ema_model, inputs, labels, mask, log_dir):
+        """
+        Save a side-by-side visualization of PET ground truth, prediction, and brain mask.
+        Called periodically during training.
+        """
+        ema_model.eval()
+        with torch.no_grad():
+            pred = ema_model(labels, torch.zeros_like(labels[:, 0, :, :]).long(), inputs, torch.zeros(inputs.size(0), device=inputs.device))
+        
+        ema_model.train()
+    
+        # Convert tensors to numpy (detach)
+        gt_np = labels[0, 0].detach().cpu().numpy()
+        pred_np = pred[0, 0].detach().cpu().numpy()
+        mask_np = mask[0, 0].detach().cpu().numpy()
+    
+        # Normalize all to [0, 1]
+        gt_np = (gt_np - gt_np.min()) / (gt_np.max() - gt_np.min() + 1e-8)
+        pred_np = (pred_np - pred_np.min()) / (pred_np.max() - pred_np.min() + 1e-8)
+        mask_np = (mask_np - mask_np.min()) / (mask_np.max() - mask_np.min() + 1e-8)
+    
+        # Combine into a single image row
+        fig, axes = plt.subplots(1, 3, figsize=(9, 3))
+        axes[0].imshow(gt_np, cmap='inferno'); axes[0].set_title('Ground Truth'); axes[0].axis('off')
+        axes[1].imshow(pred_np, cmap='inferno'); axes[1].set_title('Predicted (EMA)'); axes[1].axis('off')
+        axes[2].imshow(mask_np, cmap='gray'); axes[2].set_title('Brain Mask'); axes[2].axis('off')
+    
+        outdir = os.path.join(log_dir, "train_debug")
+        os.makedirs(outdir, exist_ok=True)
+        outpath = os.path.join(outdir, f"step_{step:06d}.png")
+        plt.tight_layout()
+        plt.savefig(outpath, dpi=150)
+        plt.close(fig)
 
 
 
