@@ -613,8 +613,11 @@ class Diffusion(object):
         """
         ema_model.eval()
         with torch.no_grad():
-            pred = ema_model(labels, torch.zeros_like(labels[:, 0, :, :]).long(), inputs, torch.zeros(inputs.size(0), device=inputs.device))
-        
+            # create a 1D tensor of timesteps (zeros for visualization)
+            t_vis = torch.zeros(inputs.size(0), dtype=torch.long, device=inputs.device)
+            pet_type_vis = torch.zeros(inputs.size(0), device=inputs.device)
+            pred = ema_model(labels, t_vis, inputs, pet_type_vis)
+
         ema_model.train()
     
         # Convert tensors to numpy (detach)
@@ -639,6 +642,7 @@ class Diffusion(object):
         plt.tight_layout()
         plt.savefig(outpath, dpi=150)
         plt.close(fig)
+
 
 
 
