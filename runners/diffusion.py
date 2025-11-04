@@ -15,7 +15,7 @@ from models.MTGD import Model
 from models.load_public_dataset_all import load_data
 from models.resample import LossSecondMomentResampler, LossAwareSampler, UniformSampler
 from functions import get_optimizer
-from functions.losses import loss_registry
+from functions.losses import loss_registry, create_brain_mask
 
 
 def pad_tensor(tensor):
@@ -246,12 +246,22 @@ class Diffusion(object):
                     e = torch.randn_like(mini_labels)
                     b = self.betas
                     t, weights = self.schedule_sampler.sample(mini_labels.shape[0], self.device)
+                    
+                    # --- Create brain mask for masked loss ---
+                    with torch.no_grad():
+                        brain_mask = create_brain_mask(mini_labels)
+
+                    # ------ Better logs for marking ---------
+                    if step == 1 or step % 1000 == 0:
+                        valid_ratio = brain_mask.mean().item()
+                        logging.info(f"[Mask] Avg nonzero ratio={valid_ratio:.3f}")
+
 
                     # ----- forward loss with/without AMP -----
                     if use_amp:
                         with autocast(device_type="cuda"):
                             loss = loss_registry[config.model.type](
-                                model, mini_labels, t, e, b, mini_inputs, pet_type_batch
+                                model, mini_labels, t, e, b, mini_inputs, pet_type_batch, mask=brain_mask
                             )
                         self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
@@ -279,8 +289,8 @@ class Diffusion(object):
 
                     else:
                         loss = loss_registry[config.model.type](
-                            model, mini_labels, t, e, b, mini_inputs, pet_type_batch
-                        )                       
+                            model, mini_labels, t, e, b, mini_inputs, pet_type_batch, mask=brain_mask
+                        )                               
                         self.schedule_sampler.update_with_local_losses(t, loss.detach())
 
                         w_loss = (loss * weights).mean(dim=0)
@@ -580,6 +590,7 @@ class Diffusion(object):
             cv2.imwrite(os.path.join(folder, str(idx)) + '.png', imgs[mini_index])
             idx += 1
         return idx
+
 
 
 
