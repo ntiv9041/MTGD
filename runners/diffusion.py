@@ -323,7 +323,7 @@ class Diffusion(object):
 
                     # --- Save visual preview every 2000 steps ---
                     if step % 2000 == 0:
-                        visualize_training_preview(
+                        Diffusion.visualize_training_preview(
                             step,
                             ema_model,
                             mini_inputs,
@@ -605,6 +605,7 @@ class Diffusion(object):
         return idx
 
     # ---- helper function visualization
+    @staticmethod
     def visualize_training_preview(step, ema_model, inputs, labels, mask, log_dir):
         """
         Save a side-by-side visualization of PET ground truth, prediction, and brain mask.
@@ -638,6 +639,7 @@ class Diffusion(object):
         plt.tight_layout()
         plt.savefig(outpath, dpi=150)
         plt.close(fig)
+
 
 
 
