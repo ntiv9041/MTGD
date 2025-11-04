@@ -7,6 +7,7 @@ from PIL import Image
 import nibabel as nib
 from skimage.metrics import structural_similarity as ssim_sk
 from skimage.metrics import peak_signal_noise_ratio as psnr_sk
+from scipy.ndimage import zoom, binary_opening, binary_closing, label
 
 def robust_minmax(x, low_q=1.0, high_q=99.0, eps=1e-8):
     lo = np.percentile(x, low_q)
@@ -46,6 +47,46 @@ def find_gt_pet(subject_id, tracer, data_root):
 def parse_slice_idx(png_name):
     m = re.search(r"(\d+)\.png$", png_name)
     return int(m.group(1)) if m else None
+
+def biggest_component(mask):
+    lab, n = label(mask)
+    if n == 0: return mask
+    vals, counts = np.unique(lab[lab>0], return_counts=True)
+    return (lab == vals[np.argmax(counts)])
+
+def pet_mask_from_slice(pet2d, thr=0.05):
+    pet2d = pet2d.astype(np.float32)
+    pet2d = pet2d - pet2d.min()
+    if pet2d.max() > 0: pet2d /= pet2d.max()
+    m = pet2d > thr
+    m = binary_opening(m, iterations=2)
+    m = binary_closing(m, iterations=2)
+    m = biggest_component(m)
+    return m
+
+def masked_metrics(pred_path, gt_slice):
+    gen = np.array(Image.open(pred_path).convert('L')).astype(np.float32) / 255.0
+    h = gen.shape[0] // 2
+    gen = gen[:h, :]  # top half (generated)
+    H2, W2 = gen.shape
+
+    gt = robust_minmax(gt_slice, 1, 99)
+    zh, zw = H2 / gt.shape[0], W2 / gt.shape[1]
+    gt_rs = zoom(gt, (zh, zw), order=1)
+
+    # Create mask from PET intensity
+    mask = pet_mask_from_slice(gt_rs)
+    if mask.sum() < 10:
+        return None  # skip blank slices
+
+    diff = (gen - gt_rs)[mask]
+    mae = float(np.abs(diff).mean())
+    mse = float((diff ** 2).mean())
+
+    # SSIM on masked area only (background = 0)
+    from skimage.metrics import structural_similarity as ssim
+    ssim_val = float(ssim(gt_rs, gen, data_range=1.0))
+    return mae, mse, np.inf, ssim_val
 
 def main():
     ap = argparse.ArgumentParser()
@@ -127,8 +168,14 @@ def main():
             gt = vol_slices[idx]
             gt = robust_minmax(gt, args.lowq, args.highq)
             gt = resize_slice(gt, pred.shape)
-            mae, mse, psnr, ssim = compute_metrics(pred, gt)
+            
+            # ----- Adding the new masked
+            vals = masked_metrics(png_path, gt)
+            if vals is None:
+                continue
+            mae, mse, psnr, ssim = vals
             slice_metrics.append((idx, mae, mse, psnr, ssim))
+
 
         if len(slice_metrics) == 0:
             print(f"[WARN] No valid slice metrics for subject={subject_id}. Using rank-paired fallback.")
@@ -139,8 +186,12 @@ def main():
                 gt = vol_slices[vi]
                 gt = robust_minmax(gt, args.lowq, args.highq)
                 gt = resize_slice(gt, pred.shape)
-                mae, mse, psnr, ssim = compute_metrics(pred, gt)
-                slice_metrics.append((vi, mae, mse, psnr, ssim))
+                # ----- Adding the new masked
+                vals = masked_metrics(png_path, gt)
+                if vals is None:
+                    continue
+                mae, mse, psnr, ssim = vals
+                slice_metrics.append((idx, mae, mse, psnr, ssim))
 
         if slice_metrics:
             sm = np.array(slice_metrics, dtype=np.float32)
