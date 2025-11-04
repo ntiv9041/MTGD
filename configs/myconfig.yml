@@ -29,7 +29,7 @@ training:
   batch_size: 16          # A100 headroom
   snapshot_freq: 1000
   n_epochs: 10000
-  n_iters: 20000          # ≈45–75 min on A100, adjust 30k for ~90 min
+  n_iters: 50000          # ≈45–75 min on A100, adjust 30k for ~90 min
   max_minutes: 75         # wall clock safeguard
   mixed_precision: true   # AMP switch (patch below)
   log_every: 100          # console logging cadence (patch below)
