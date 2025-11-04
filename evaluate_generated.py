@@ -78,7 +78,12 @@ def main():
         subject_id = str(r[subj_col])
         tracer = str(r[tracer_col])
 
-        gen_dir = os.path.join(args.images_root, folder_id)
+        # handle absolute or already-prefixed paths gracefully
+        if os.path.isabs(folder_id) or folder_id.startswith("./") or folder_id.startswith("exp/"):
+            gen_dir = folder_id
+        else:
+            gen_dir = os.path.join(args.images_root, folder_id)
+
         pngs = sorted(glob.glob(os.path.join(gen_dir, "*.png")), key=lambda p: parse_slice_idx(os.path.basename(p)))
         if not pngs:
             print(f"[WARN] No PNGs found in {gen_dir}")
