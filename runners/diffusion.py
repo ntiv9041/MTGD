@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 torch.backends.cudnn.benchmark = True
+import torch.serialization
+torch.serialization.add_safe_globals([np.core.multiarray.scalar])  # allowlist the saved NumPy scalar type
+
 
 sys.path.append('..')
 from models.MTGD import Model
@@ -141,7 +144,8 @@ class Diffusion(object):
 
         # resume_training
         if self.args.resume_training:
-            states = torch.load(os.path.join(self.args.log_path, "ckpt.pth"))
+            ckpt_path = os.path.join(self.args.log_path, "ckpt.pth")
+            states = torch.load(ckpt_path, map_location=self.device, weights_only=False)
             model.load_state_dict(states[0])
             # keep optimizer eps from config
             states[1]["param_groups"][0]["eps"] = self.config.optim.eps
@@ -642,6 +646,7 @@ class Diffusion(object):
         plt.tight_layout()
         plt.savefig(outpath, dpi=150)
         plt.close(fig)
+
 
 
 
