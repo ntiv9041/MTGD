@@ -4,21 +4,24 @@ from torchmetrics.functional import structural_similarity_index_measure as ssim
 
 
 # --------------------------------------------------------
-# Helper: Create simple PET brain mask
+# Helper: Correct brain mask creation
 # --------------------------------------------------------
-def create_brain_mask(x, threshold=0.05):
+def create_brain_mask(x, threshold=0.01):
     """
-    Create a binary brain mask from PET (or MRI-like) input.
-    Ignores background and focuses loss on tissue region.
+    Create a binary brain mask from PET input:
+      - 1 = brain region (voxels > threshold * local max)
+      - 0 = background
+    Works slice-wise to avoid global over-thresholding.
     """
     with torch.no_grad():
-        # mask = (x > threshold * x.max(dim=(-1, -2), keepdim=True).values).float()
-        mask = (x > threshold * x.max()).float()
+        # Compute per-slice local maxima to adapt to intensity range
+        local_max = x.amax(dim=(-1, -2), keepdim=True)
+        mask = (x > threshold * local_max).float()
     return mask
 
 
 # --------------------------------------------------------
-# Main diffusion noise estimation loss (with masking)
+# Main masked diffusion loss
 # --------------------------------------------------------
 def noise_estimation_loss(
     model,
@@ -33,44 +36,40 @@ def noise_estimation_loss(
     mask=None,
 ):
     """
-    Combined masked diffusion loss:
-      - Predicts added noise (eps)
-      - Uses MSE + SSIM hybrid objective
-      - Optionally applies a PET brain mask to focus on relevant voxels
+    Diffusion noise-prediction loss with masked supervision:
+      - Focuses on brain voxels
+      - Suppresses background
+      - Combines masked MSE + SSIM structure term
     """
-    # alpha cumprod
+    # time-dependent weighting
     a = (1 - b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
-
-    # generate noisy sample x_t
     x = x0 * a.sqrt() + e * (1.0 - a).sqrt()
-
-    # model predicts noise
     output = model(x, t.float(), condition, pet_type)
 
-    # raw noise estimation error
     err = (e - output)
 
     # --------------------------------------------------------
-    # optional shape handling for debugging
+    # Create or validate mask
     # --------------------------------------------------------
-    if keepdim:
-        return err.square().sum(dim=(1, 2, 3))
-    if loss_moment:
-        return err.square().mean(dim=list(range(1, len(output.shape))))
+    if mask is None:
+        mask = create_brain_mask(x0, threshold=0.01)
+
+    # Ensure proper shape & normalization
+    mask = F.interpolate(mask, size=x0.shape[-2:], mode='nearest')
+    inv_mask = 1.0 - mask
 
     # --------------------------------------------------------
-    # Masked MSE region loss
+    # Masked region loss (inside brain only)
     # --------------------------------------------------------
-    mse_map = err.square()
-    if mask is not None:
-        mse_map = mse_map * mask
-        denom = mask.sum() + 1e-6
-        mse = mse_map.sum() / denom
-    else:
-        mse = mse_map.mean()
+    mse_in = ((err ** 2) * mask).sum() / (mask.sum() + 1e-6)
 
     # --------------------------------------------------------
-    # Structural Similarity on predicted x0
+    # Weak background suppression (encourages dark background)
+    # --------------------------------------------------------
+    mse_out = ((output ** 2) * inv_mask).mean()
+
+    # --------------------------------------------------------
+    # Structural Similarity (inside mask)
     # --------------------------------------------------------
     a_sqrt = a.sqrt()
     x0_pred = (x - (1.0 - a).sqrt() * output) / a_sqrt
@@ -78,21 +77,22 @@ def noise_estimation_loss(
     x0_true = torch.clamp(x0, 0.0, 1.0)
 
     try:
-        ssim_val = ssim(x0_pred, x0_true, data_range=1.0)
+        ssim_val = ssim(x0_pred * mask, x0_true * mask, data_range=1.0)
     except Exception:
         ssim_val = torch.tensor(0.0, device=x0.device)
 
     # --------------------------------------------------------
-    # Weighted blend
+    # Final weighted combination
     # --------------------------------------------------------
-    loss = 0.84 * mse + 0.16 * (1.0 - ssim_val)
+    loss = (
+        0.80 * mse_in    # main brain loss
+        + 0.15 * (1.0 - ssim_val)  # structure similarity
+        + 0.05 * mse_out  # weak background penalty
+    )
 
     return loss
 
 
-# --------------------------------------------------------
-# Loss registry (keeps consistency with runner)
-# --------------------------------------------------------
 loss_registry = {
     "simple": noise_estimation_loss,
 }
